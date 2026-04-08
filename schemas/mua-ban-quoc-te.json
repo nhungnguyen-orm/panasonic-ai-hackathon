@@ -1,0 +1,242 @@
+{
+    "Số hợp đồng": {
+        "type": "string",
+        "required": true
+    },
+    "Ngày lập hợp đồng": {
+        "type": "string",
+        "required": true
+    },
+    "Ngày tháng năm ký": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Tên công ty": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Đại diện": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Chức vụ": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Trụ sở": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Tài khoản số": {
+        "type": "number",
+        "required": true
+    },
+    "Bên mua - Ngân hàng": {
+        "type": "string",
+        "required": true
+    },
+    "Bên mua - Mã số công ty": {
+        "type": "number",
+        "required": true
+    },
+    "Bên bán - Tên công ty": {
+        "type": "string",
+        "required": true
+    },
+    "Bên bán - Đại diện": {
+        "type": "string",
+        "required": true
+    },
+    "Bên bán - Chức vụ": {
+        "type": "string",
+        "required": true
+    },
+    "Bên bán - Trụ sở": {
+        "type": "string",
+        "required": true
+    },
+    "Bên bán - Tài khoản số": {
+        "type": "number",
+        "required": true
+    },
+    "Bên bán - Ngân hàng": {
+        "type": "string",
+        "required": true
+    },
+    "Bên bán - Mã số công ty": {
+        "type": "number",
+        "required": true
+    },
+    "Phạm vi cung cấp": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Chi tiết vật tư": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Phụ lục danh mục": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - CIF": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Tên hàng": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Nhà sản xuất": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Nhà cung cấp": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Số lượng và số chế tạo hàng hóa": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Chất lượng": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Xuất xứ nguồn gốc": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Đóng gói": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Giá cả": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 2 - Danh mục - Mã hiệu": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 3 - Tổng giá trị hợp đồng": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 3 - Tổng giá trị hợp đồng (bằng chữ)": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 3 - Giá trị thiết bị": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 3 - Giá dịch vụ": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 3 - Phụ lục": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 3 - Danh mục vật tư ở phụ lục": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 4 - Cảng xếp hàng": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 4 - Cảng đích": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 4 - Thời gian giao hàng": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 4 - Thông báo trước khi giao hàng (ngày)": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 4 - Thông báo giao hàng (ngày)": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 5 - Bên bán PTTT": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 5 - Hiệu lực cao nhất LC (ngày)": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 5 - Giá trị chứng nhận bảo hiểm rủi ro": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 5 - Điều trong bản hợp đồng": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 6 - Tuổi tàu": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 7 - Thời gian bảo hiểm": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 7 - Người hưởng lợi từ Bảo hiểm": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 7 - Khiếu nại được thanh toán": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 8 - Kiểm tra lần hai do": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 8 - Thời gian gửi ngay (ngày)": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 8 - Thời gian giải quyết khiếu nại": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 10 - Ngày bảo lãnh thực hiện hợp đồng": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 10 - Giá trị 10% tổng giá trị hợp đồng": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 11 - Phụ lục Chấm dứt hợp đồng": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 11 - Thời gian kéo dài": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 12 - Trách nhiệm pháp ly - Mức đền bù": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 12 - Trách nhiệm pháp ly - Max đền bù": {
+        "type": "number",
+        "required": true
+    },
+    "Điều 18 - Hệ thống đo": {
+        "type": "string",
+        "required": true
+    },
+    "Điều 19 - Phụ lục": {
+        "type": "string",
+        "required": true
+    }
+}

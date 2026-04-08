@@ -1,0 +1,5 @@
+python-docx
+boto3
+python-dotenv
+streamlit
+json-repair

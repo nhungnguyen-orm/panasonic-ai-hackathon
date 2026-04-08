@@ -1,0 +1,221 @@
+{
+  "Số hợp đồng": {
+    "type": "string",
+    "required": true
+  },
+  "Năm hợp đồng": {
+    "type": "number",
+    "required": true
+  },
+  "Ngày tháng năm ký": {
+    "type": "string",
+    "required": true
+  },
+  "Địa điểm ký": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Tên doanh nghiệp": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Mã số doanh nghiệp": {
+    "type": "number",
+    "required": true
+  },
+  "Bên A - Địa chỉ trụ sở chính": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Điện thoại": {
+    "type": "number",
+    "required": true
+  },
+  "Bên A - Fax": {
+    "type": "number"
+  },
+  "Bên A - Tài khoản số": {
+    "type": "number",
+    "required": true
+  },
+  "Bên A - Mở tại ngân hàng": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Đại diện theo pháp luật": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Chức vụ": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - CMND/Thẻ CCCD số": {
+    "type": "number",
+    " required": true
+  },
+  "Bên A - Nơi cấp": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Ngày cấp CMND/CCCD": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Giấy ủy quyền số": {
+    "type": "number",
+    "required": true
+  },
+  "Bên A - Ngày tháng năm tạo giấy ủy quyền": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Người tạo giấy ủy quyền": {
+    "type": "string",
+    "required": true
+  },
+  "Bên A - Chức vụ người tạo giấy ủy quyền": {
+    "type": "string"
+  },
+  "Bên B - Tên doanh nghiệp": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Mã số doanh nghiệp": {
+    "type": "number",
+    "required": true
+  },
+  "Bên B - Địa chỉ trụ sở chính": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Điện thoại": {
+    "type": "number",
+    "required": true
+  },
+  "Bên B - Fax": {
+    "type": "number"
+  },
+  "Bên B - Tài khoản số": {
+    "type": "number",
+    "required": true
+  },
+  "Bên B - Mở tại ngân hàng": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Đại diện theo pháp luật": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Chức vụ": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - CMND/Thẻ CCCD số": {
+    "type": "number",
+    "required": true
+  },
+  "Bên B - Nơi cấp": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Ngày cấp CMND/CCCD": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Giấy ủy quyền số": {
+    "type": "number",
+    "required": true
+  },
+  "Bên B - Ngày tháng năm tạo giấy ủy quyền": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Người tạo giấy ủy quyền": {
+    "type": "string",
+    "required": true
+  },
+  "Bên B - Chức vụ người tạo giấy ủy quyền": {
+    "type": "string"
+  },
+  "Điều 1 - Số thứ tự": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 1 - Tên hàng hóa": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 1 - Đơn vị": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 1 - Số lượng": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 1 - Đơn giá": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 1 - Thành tiền": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 1 - Ghi chú": {
+    "type": "string"
+  },
+  "Điều 1 - Số tiền bằng chữ": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 2 - Ngày tháng năm thanh toán": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 2 - Hình thức thanh toán": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 3 - Lịch giao nhận": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 3 - Bên chịu chi phí vận chuyển": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 3 - Chi phí bốc xếp": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 3 - Chi phí lưu kho bãi": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 3 - Cơ quan kiểm tra trung gian": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 5 - Loại hàng bảo hành": {
+    "type": "string",
+    "required": true
+  },
+  "Điều 5 - Thời gian bảo hành": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 6 - Tỷ lệ phạt vi phạm": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 8 - Tổng số bản hợp đồng": {
+    "type": "number",
+    "required": true
+  },
+  "Điều 8 - Số bản mỗi bên giữ": {
+    "type": "number",
+    "required": true
+  }
+}
