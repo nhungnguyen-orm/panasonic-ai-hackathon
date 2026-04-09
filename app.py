@@ -101,7 +101,7 @@ with st.container():
         )
     with ucol2:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        run_btn = st.button("🔍 Analyze & Check", type="primary", use_container_width=True, disabled=not uploaded)
+        run_btn = st.button("Analyze & Check", type="primary", use_container_width=True, disabled=not uploaded)
 
 if not uploaded:
     st.markdown("""
@@ -118,7 +118,8 @@ if run_btn:
             tmp.write(uploaded.read())
             tmp_path = tmp.name
         try:
-            results, extracted, contract_text, contract_type, typos = process_contract(tmp_path)
+            results, extracted, contract_text, contract_type = process_contract(tmp_path)
+            typos = []
         finally:
             os.unlink(tmp_path)
 
@@ -160,15 +161,15 @@ error_rules: list[tuple] = []   # (line_hint, value, field, reason) — wrong va
 missing_rules: list[tuple] = [] # (line_hint, field, reason) — missing value
 
 for r in errors:
-    val       = r["value"]
-    hint      = r.get("line_hint", "").strip()
+    val   = r["value"]
+    hint  = r.get("line_hint", "").strip()
+    # Always derive hint from field name if not provided
+    if not hint:
+        parts = r["field"].split(" - ")
+        hint  = re.sub(r"\s*\(.*?\)\s*$", "", parts[-1]).strip()
     if val is not None and str(val).strip():
         error_rules.append((hint, str(val), r["field"], r["reason"] or ""))
     else:
-        # For missing fields: use line_hint if available, else fallback to last segment of field name
-        if not hint:
-            parts = r["field"].split(" - ")
-            hint  = re.sub(r"\s*\(.*?\)\s*$", "", parts[-1]).strip()
         missing_rules.append((hint, r["field"], r["reason"] or ""))
 
 typo_words: list[dict] = [t for t in typos if t.get("wrong")]
@@ -255,7 +256,7 @@ with left:
         had_error = had_wrong or had_missing
 
         if is_table:
-            bg     = "#fff1f0" if had_missing else "#fafafa"
+            bg     = "#fff1f0" if had_error else "#fafafa"
             border = "#ff4d4f" if had_error else "#e0e0e0"
             html_lines.append(
                 f'<div style="font-family:monospace;font-size:13px;color:#000;'

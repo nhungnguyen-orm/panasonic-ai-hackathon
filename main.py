@@ -10,13 +10,13 @@ from validator import validate_contract
 
 load_dotenv()
 
-AWS_PROFILE = os.getenv("AWS_PROFILE")
-AWS_REGION  = os.getenv("AWS_REGION")
+# AWS_PROFILE = os.getenv("AWS_PROFILE")
+# AWS_REGION  = os.getenv("AWS_REGION")
 MODEL_ID         = os.getenv("MODEL_ID")
 MODEL_ID_EXTRACT = os.getenv("MODEL_ID_EXTRACT")
 
-session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-client  = session.client("bedrock-runtime")
+# session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+client  = boto3.client("bedrock-runtime", region_name='ap-southeast-2')
 
 JSON_DIR = "json"
 
@@ -184,6 +184,13 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
    -> TRẢ VỀ STRING
 
 8. TRƯỜNG LIÊN QUAN ĐẾN Tài khoản số, Mã số công ty, Giá, Thời gian → TRẢ VỀ NUMBER (bỏ dấu phân cách)
+
+9. TRÍCH XUẤT TRUNG THỰC KHI THÔNG TIN BỊ THIẾU/CẮT ĐỨT:
+   - Nếu câu văn bị cắt đứt hoặc thiếu thông tin (ví dụ: "danh mục vật tư ở Phụ lục" không có số),
+     hãy điền giá trị gần nhất có thể suy ra từ ngữ cảnh xung quanh.
+   - Ví dụ: "danh mục vật tư ở Phụ lục" (thiếu số) → tìm số phụ lục được đề cập gần nhất trong Điều đó
+   - KHÔNG để trống ("") nếu có thể suy ra giá trị từ ngữ cảnh
+   - Nếu thực sự không thể suy ra → để ""
 """
 }
 
@@ -270,11 +277,11 @@ def _build_prompt_static_tieng_anh(schema_template: str) -> str:
     - Extract as a JSON object with an "items" array
     - Each item must have: description, quantity (integer), price_per_unit (number), total_price (number)
     - Example:
-        {
+        {{
         "items": [
-            {"description": "Laptop Model X", "quantity": 10, "price_per_unit": 500, "total_price": 5000}
+            {{"description": "Laptop Model X", "quantity": 10, "price_per_unit": 500, "total_price": 5000}}
         ]
-        }
+        }}
     -> RETURN OBJECT (nested JSON)
 
     GENERAL RULES:
@@ -390,72 +397,6 @@ def _build_prompt(contract_text: str, schema_template: str, contract_type: str) 
     """
 
 
-def check_typos(contract_text: str, contract_type: str) -> list[dict]:
-    """
-    Use LLM to find misspelled words in the contract text.
-    Returns list of {"wrong": str, "correct": str}.
-    Only checks individual words — not grammar or meaning.
-    """
-    from time import perf_counter
-
-    if contract_type == "mua_ban_tieng_anh":
-        prompt = f"""
-        You are a spell-checker. Read the contract below and find all misspelled words.
-
-        Rules:
-        - Check individual words only (spelling mistakes, not grammar or meaning)
-        - Proper nouns, company names, abbreviations, numbers → SKIP
-        - Only flag words that are clearly misspelled
-        - Return a JSON array. Each item: {{"wrong": "<misspelled word as it appears>", "correct": "<correct spelling>"}}
-        - If no typos found, return []
-        - Return pure JSON array only, NO markdown, NO explanation
-
-        Contract:
-        {contract_text[:6000]}
-
-        JSON:"""
-    else:
-        prompt = f"""
-        Bạn là chuyên gia kiểm tra chính tả tiếng Việt. Đọc hợp đồng bên dưới và tìm tất cả các từ bị viết sai chính tả.
-
-        Quy tắc:
-        - Chỉ kiểm tra lỗi chính tả từng từ (sai dấu, sai chữ cái) — KHÔNG kiểm tra ngữ pháp hay ý nghĩa
-        - Tên riêng, tên công ty, viết tắt, số → BỎ QUA
-        - Chỉ đánh dấu từ rõ ràng bị sai chính tả
-        - Trả về JSON array. Mỗi phần tử: {{"wrong": "<từ sai như trong văn bản>", "correct": "<từ đúng>"}}
-        - Nếu không có lỗi, trả về []
-        - Chỉ trả về JSON array thuần túy, KHÔNG markdown, KHÔNG giải thích
-
-        Nội dung hợp đồng:
-        {contract_text[:6000]}
-
-        JSON:"""
-
-    t0 = perf_counter()
-    response = client.converse(
-        modelId=MODEL_ID_EXTRACT,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-    )
-    raw = response["output"]["message"]["content"][0]["text"].strip()
-    print(f"  [typo] LLM response: {perf_counter() - t0:.2f}s")
-
-    # Parse JSON array
-    try:
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        start = raw.find("[")
-        end   = raw.rfind("]") + 1
-        if start == -1 or end == 0:
-            return []
-        result = json.loads(raw[start:end])
-        if isinstance(result, list):
-            return [r for r in result if r.get("wrong") and r.get("correct")]
-    except Exception as e:
-        print(f"  [WARN] typo parse error: {e}")
-    return []
 
 
 def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
@@ -523,15 +464,14 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
 
 # Full pipeline
 
-def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str, list[dict]]:
+def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
     """
     Upload → Parse → LLM classify → Load ContractSchema (DynamoDB)
-    → Generate dynamic prompt → LLM extract + typo check (parallel) → Validate → Return results
+    → Generate dynamic prompt → LLM extract → Validate → Return results
 
-    Returns: (validation_results, extracted_data, raw_text, contract_type, typos)
+    Returns: (validation_results, extracted_data, raw_text, contract_type)
     """
     from time import perf_counter
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _step(label: str, t0: float) -> float:
         t1 = perf_counter()
@@ -558,15 +498,10 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
 
     schema = get_extraction_schema(contract_type)
     print(f"    → {len(schema)} fields loaded")
-    t0 = _step(f"[4] Generate dynamic prompt + LLM extract + typo check (parallel)...", t0)
+    t0 = _step(f"[4] Generate dynamic prompt + LLM extract...", t0)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_extract = executor.submit(extract_contract_info, contract_text, schema, contract_type)
-        future_typos   = executor.submit(check_typos, contract_text, contract_type)
-        extracted = future_extract.result()
-        typos     = future_typos.result()
+    extracted = extract_contract_info(contract_text, schema, contract_type)
 
-    print(f"    → {len(typos)} typos found")
     with open(extracted_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, ensure_ascii=False, indent=2)
     print(f"    → Saved: {extracted_path}")
@@ -581,7 +516,7 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"    Total: {total:.2f}s")
     print(f"{'='*50}")
 
-    return results, extracted, contract_text, contract_type, typos
+    return results, extracted, contract_text, contract_type
 
 
 if __name__ == "__main__":
