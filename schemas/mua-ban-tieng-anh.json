@@ -1,0 +1,82 @@
+{
+    "Effective Date": {
+        "type": "string",
+        "required": true
+    },
+    "Seller Name": {
+        "type": "string",
+        "required": true
+    },
+    "Seller Address": {
+        "type": "string",
+        "required": true
+    },
+    "Customer Name": {
+        "type": "string",
+        "required": true
+    },
+    "Customer Address": {
+        "type": "string",
+        "required": true
+    },
+    "Goods and price": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": {
+                            "type": "string"
+                        },
+                        "quantity": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "price_per_unit": {
+                            "type": "number"
+                        },
+                        "total_price": {
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "description",
+                        "quantity",
+                        "price_per_unit",
+                        "total_price"
+                    ]
+                }
+            },
+            "required": [
+                "items",
+                "grand_total_amount_written"
+            ]
+        }
+    },
+    "Total Amount": {
+        "type": "number",
+        "required": true
+    },
+    "Location": {
+        "type": "string",
+        "required": true
+    },
+    "Shipping Method decided by": {
+        "type": "string",
+        "required": true
+    },
+    "Responsible for costs": {
+        "type": "string",
+        "required": true
+    },
+    "Termination Notice Period": {
+        "type": "number",
+        "required": true
+    },
+    "Governing Law Jurisdiction": {
+        "type": "string",
+        "required": true
+    }
+}

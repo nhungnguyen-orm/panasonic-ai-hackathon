@@ -79,10 +79,10 @@ with hcol2:
     st.markdown("""
         <div style="padding-top:8px;">
             <h1 style="margin:0;font-size:26px; text-transform: uppercase; font-weight:700;color:#0057a8;">
-                Kiểm tra hợp đồng tự động
+                Automated Contract Checker
             </h1>
             <p style="margin:4px 0 0;font-size:13px;color:#666;">
-                Upload file hợp đồng (.docx) · Trích xuất thông tin · Highlight lỗi trực tiếp trên văn bản
+                Upload a contract file (.docx) · Extract information · Highlight errors directly on the document
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -94,31 +94,31 @@ with st.container():
     ucol1, ucol2 = st.columns([3, 1], gap="large")
     with ucol1:
         uploaded = st.file_uploader(
-            "Chọn file hợp đồng (.docx)",
+            "Select contract file (.docx)",
             type=["docx"],
             label_visibility="collapsed",
-            help="Hỗ trợ hợp đồng mua bán đơn giản và hợp đồng mua bán quốc tế"
+            help="Supports simple purchase contracts and international trade contracts"
         )
     with ucol2:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        run_btn = st.button("Xử lý & Kiểm tra", type="primary", use_container_width=True, disabled=not uploaded)
+        run_btn = st.button("🔍 Analyze & Check", type="primary", use_container_width=True, disabled=not uploaded)
 
 if not uploaded:
     st.markdown("""
         <div style="text-align:center;padding:40px;color:#aaa;">
             <div style="font-size:48px;">📄</div>
-            <div style="font-size:16px;margin-top:8px;">Vui lòng upload file hợp đồng để bắt đầu</div>
+            <div style="font-size:16px;margin-top:8px;">Please upload a contract file to get started</div>
         </div>
     """, unsafe_allow_html=True)
     st.stop()
 
 if run_btn:
-    with st.spinner("Đang phân tích hợp đồng..."):
+    with st.spinner("Analyzing contract..."):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
             tmp.write(uploaded.read())
             tmp_path = tmp.name
         try:
-            results, extracted, contract_text, contract_type = process_contract(tmp_path)
+            results, extracted, contract_text, contract_type, typos = process_contract(tmp_path)
         finally:
             os.unlink(tmp_path)
 
@@ -127,6 +127,7 @@ if run_btn:
     st.session_state["contract_text"] = contract_text
     st.session_state["contract_type"] = contract_type
     st.session_state["filename"]      = uploaded.name
+    st.session_state["typos"]         = typos
     st.session_state["error_page"]    = 1
 
 if "results" not in st.session_state:
@@ -137,6 +138,7 @@ extracted: dict     = st.session_state["extracted"]
 contract_text: str  = st.session_state["contract_text"]
 contract_type: str  = st.session_state["contract_type"]
 filename: str       = st.session_state["filename"]
+typos: list[dict]   = st.session_state.get("typos", [])
 
 errors   = [r for r in results if not r["corrected"]]
 ok_count = len(results) - len(errors)
@@ -144,55 +146,83 @@ ok_count = len(results) - len(errors)
 # ── Summary metrics ───────────────────────────────────────────────────────────
 st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Loại hợp đồng", contract_type.replace("_", " ").title())
-c2.metric("Tổng số trường", len(results))
-c3.metric("Hợp lệ", ok_count)
-c4.metric("Lỗi", len(errors), delta=f"-{len(errors)}" if errors else None, delta_color="inverse")
+c1.metric("Contract Type", contract_type.replace("_", " ").title())
+c2.metric("Total Fields", len(results))
+c3.metric("✅ Valid", ok_count)
+c4.metric("❌ Errors", len(errors), delta=f"-{len(errors)}" if errors else None, delta_color="inverse")
+c5, c6 = st.columns([1, 3])
+# c5.metric("⚠️ Typos", len(typos))
 st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
 
 # ── Highlight helpers ─────────────────────────────────────────────────────────
-def _field_keyword(field_name: str) -> str:
-    parts = field_name.split(" - ")
-    keyword = parts[-1].strip()
-    return re.sub(r"\s*\(.*?\)\s*$", "", keyword).strip()
-
-error_rules: list[tuple] = []
-missing_keywords: list[tuple] = []
+# Build rules from validation results using LLM-provided line_hints
+error_rules: list[tuple] = []   # (line_hint, value, field, reason) — wrong value
+missing_rules: list[tuple] = [] # (line_hint, field, reason) — missing value
 
 for r in errors:
-    val = r["value"]
-    kw  = _field_keyword(r["field"])
+    val       = r["value"]
+    hint      = r.get("line_hint", "").strip()
     if val is not None and str(val).strip():
-        error_rules.append((kw, str(val), r["field"], r["reason"] or ""))
-    elif kw:
-        missing_keywords.append((kw, r["field"], r["reason"] or ""))
+        error_rules.append((hint, str(val), r["field"], r["reason"] or ""))
+    else:
+        # For missing fields: use line_hint if available, else fallback to last segment of field name
+        if not hint:
+            parts = r["field"].split(" - ")
+            hint  = re.sub(r"\s*\(.*?\)\s*$", "", parts[-1]).strip()
+        missing_rules.append((hint, r["field"], r["reason"] or ""))
+
+typo_words: list[dict] = [t for t in typos if t.get("wrong")]
 
 
-def highlight_line(line: str, rules: list, missing_kw: list) -> tuple[str, bool, bool]:
+def highlight_line(line: str, wrong_rules: list, miss_rules: list, typo_list: list) -> tuple[str, bool, bool, bool]:
     escaped     = html.escape(line)
     had_wrong   = False
     had_missing = False
+    had_typo    = False
 
-    for kw, val, field, reason in sorted(rules, key=lambda x: -len(x[1])):
+    # Wrong value → red highlight on the value, only on the line matching the hint
+    for hint, val, field, reason in sorted(wrong_rules, key=lambda x: -len(x[1])):
         escaped_val = html.escape(val)
-        if escaped_val in escaped and kw.lower() in line.lower():
-            tooltip = html.escape(f"{field}: {reason}")
-            escaped = escaped.replace(escaped_val,
-                f'<mark style="background:#ff4d4f;color:#fff;border-radius:3px;'
-                f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_val}</mark>', 1)
-            had_wrong = True
+        if escaped_val not in escaped:
+            continue
+        # If we have a hint, verify this line matches it (use raw hint for text matching)
+        if hint and hint[:30].lower() not in line.lower():
+            continue
+        tooltip = html.escape(f"{field}: {reason}", quote=True)
+        escaped = escaped.replace(escaped_val,
+            f'<mark style="background:#ff4d4f;color:#fff;border-radius:3px;'
+            f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_val}</mark>', 1)
+        had_wrong = True
 
-    for kw, field, reason in missing_kw:
-        if kw.lower() in line.lower():
-            tooltip = html.escape(f"{field}: {reason}")
-            escaped = (
-                f'<span title="{tooltip}" style="background:#fff1f0;'
-                f'border-left:3px solid #ff4d4f;padding-left:6px;display:block;">{escaped}</span>'
-            )
-            had_missing = True
-            break
+    # Missing value → red left border on the line matching the hint
+    if not had_wrong:
+        for hint, field, reason in miss_rules:
+            # Use raw hint for text matching, but never inject hint into HTML
+            if hint and hint[:40].lower() in line.lower():
+                tooltip = html.escape(f"{field}: {reason}", quote=True)
+                escaped = (
+                    f'<span title="{tooltip}" style="background:#fff1f0;'
+                    f'border-left:3px solid #ff4d4f;padding-left:6px;display:block;">'
+                    f'{escaped}</span>'
+                )
+                had_missing = True
+                break
 
-    return escaped, had_wrong, had_missing
+    # Typo → yellow highlight
+    for t in sorted(typo_list, key=lambda x: -len(x.get("wrong", ""))):
+        wrong   = t.get("wrong", "")
+        correct = t.get("correct", "")
+        if not wrong:
+            continue
+        escaped_wrong = html.escape(wrong)
+        if escaped_wrong in escaped:
+            tooltip = html.escape(f'Typo: "{wrong}" → "{correct}"', quote=True)
+            escaped = escaped.replace(escaped_wrong,
+                f'<mark style="background:#fadb14;color:#000;border-radius:3px;'
+                f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_wrong}</mark>', 1)
+            had_typo = True
+
+    return escaped, had_wrong, had_missing, had_typo
 
 
 # ── Two-column layout ─────────────────────────────────────────────────────────
@@ -201,7 +231,7 @@ left, right = st.columns([3, 2], gap="large")
 with left:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
-        f'<span style="font-size:24px;text-transform: uppercase;font-weight:600;color:#fff;">📋 Nội dung hợp đồng</span>'
+        f'<span style="font-size:24px;text-transform: uppercase;font-weight:600;color:#fff;">📋 Contract Content</span>'
         f'<span style="font-size:13px;color:#888;background:#f0f0f0;padding:2px 10px;'
         f'border-radius:12px;">{html.escape(filename)}</span>'
         f'</div>',
@@ -209,7 +239,7 @@ with left:
     )
 
     if not errors:
-        st.success("Không phát hiện lỗi nào trong hợp đồng.")
+        st.success("No errors detected in the contract.")
 
     lines = contract_text.split("\n")
     html_lines = []
@@ -221,7 +251,7 @@ with left:
 
         is_table = line.startswith("[TABLE]:")
         content  = line[8:].strip() if is_table else line
-        rendered, had_wrong, had_missing = highlight_line(content, error_rules, missing_keywords)
+        rendered, had_wrong, had_missing, had_typo = highlight_line(content, error_rules, missing_rules, typo_words)
         had_error = had_wrong or had_missing
 
         if is_table:
@@ -246,19 +276,19 @@ with left:
 
 with right:
     st.markdown(
-        '<div style="text-transform: uppercase;font-size:22px;font-weight:600;color:#fff;margin-bottom:4px;">Danh sách lỗi</div>',
+        '<div style="text-transform: uppercase;font-size:22px;font-weight:600;color:#fff;margin-bottom:4px;">Error List</div>',
         unsafe_allow_html=True,
     )
 
     if not errors:
-        st.success("Hợp đồng hợp lệ — không có lỗi.")
+        st.success("Contract is valid — no errors found.")
     else:
         PAGE_SIZE   = 4
         total_pages = (len(errors) + PAGE_SIZE - 1) // PAGE_SIZE
         page        = st.session_state.get("error_page", 1)
 
         if total_pages > 1:
-            st.caption(f"Trang {page}/{total_pages} · {len(errors)} lỗi")
+            st.caption(f"Page {page}/{total_pages} · {len(errors)} errors")
             cols = st.columns(total_pages + 2)
             if cols[0].button("‹", key="prev_page"):
                 page = max(1, page - 1)
@@ -269,13 +299,17 @@ with right:
                 page = min(total_pages, page + 1)
             st.session_state["error_page"] = page
         else:
-            st.caption(f"{len(errors)} lỗi")
+            st.caption(f"{len(errors)} error(s)")
 
         start = (page - 1) * PAGE_SIZE
         for r in errors[start: start + PAGE_SIZE]:
+            is_missing = r["value"] is None or str(r["value"]).strip() == ""
             with st.container(border=True):
                 st.markdown(f"**{r['field']}**")
-                st.markdown(f"Giá trị: `{r['value']}`  \n:red[{r['reason']}]")
+                if is_missing:
+                    st.markdown(f":red[{r['reason']}]")
+                else:
+                    st.markdown(f"Value: `{r['value']}`  \n:red[{r['reason']}]")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 import base64
@@ -287,7 +321,7 @@ fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
 with fcol2:
     st.markdown(
         f'<div style="text-align:center;">'
-        f'<div style="font-size:16px;color:#aaa;margin-bottom:8px;">© Copyright Renova Cloud. All Rights Reserved.</div>'
+        f'<div style="font-size:12px;color:#aaa;margin-bottom:8px;">© Copyright Renova Cloud. All Rights Reserved.</div>'
         f'<img src="data:image/png;base64,{renova_b64}" style="width:150px;object-fit:contain;">'
         f'</div>',
         unsafe_allow_html=True,

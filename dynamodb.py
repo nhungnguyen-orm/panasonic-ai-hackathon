@@ -8,7 +8,7 @@ load_dotenv()
 
 AWS_PROFILE       = os.getenv("AWS_PROFILE")
 AWS_REGION        = os.getenv("AWS_REGION")
-SCHEMA_TABLE_NAME = "PanasonicContractSchema"
+SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
 session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 dynamodb_client   = session.client("dynamodb")
@@ -18,6 +18,7 @@ dynamodb_resource = session.resource("dynamodb")
 CONTRACT_REGISTRY = {
     "mua_ban_don_gian":  "schemas/mua-ban-don-gian.json",
     "mua_ban_quoc_te":   "schemas/mua-ban-quoc-te.json",
+    "mua_ban_tieng_anh":   "schemas/mua-ban-tieng-anh.json",
 }
 
 

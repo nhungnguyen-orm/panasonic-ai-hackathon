@@ -32,6 +32,12 @@ CONTRACT_TYPE_DESCRIPTIONS = {
         "có Incoterms (FOB/CIF/EXW...), cảng xuất/nhập (Port of Loading/Discharge), "
         "ngoại tệ USD/EUR, có thể song ngữ Anh-Việt."
     ),
+    "mua_ban_tieng_anh": (
+        "Hợp đồng mua bán hàng hóa bằng tiếng Anh (thuần Anh ngữ). "
+        "Dấu hiệu nhận biết: toàn bộ nội dung viết bằng tiếng Anh, có 'Seller'/'Customer' hoặc 'Buyer', "
+        "các điều khoản như 'Governing Law', 'Termination', 'Shipping Method', "
+        "KHÔNG có nội dung tiếng Việt, KHÔNG có Incoterms/cảng xuất nhập."
+    ),
 }
 
 
@@ -128,14 +134,11 @@ def _parse_json_from_response(raw_text: str) -> dict:
 
 
 # Step 4: LLM extract
-
-# Extraction rules for mua_ban_quoc_te — tells LLM exactly how to parse each field pattern
-# mua_ban_don_gian uses a different 2-step prompt (see _build_prompt)
 EXTRACTION_RULES = {
-    "mua_ban_quoc_te": """
+    """
 QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 
-1. TRƯỜNG SỐ TIỀN / GIÁ TRỊ (type=number):
+1. TRƯỜNG Số tiền / Giá trị / Giá cả (type=number):
    - Chỉ lấy phần số, bỏ đơn vị tiền tệ (USD, VNĐ...) và điều kiện giao hàng (CIF, FOB...)
    - Ví dụ: "100.000 USD CIF Hải Phòng" → 100000
    - Ví dụ: "2.000 USD/bộ" → 2000
@@ -159,11 +162,10 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
    - Ví dụ: "24 tháng" → 24
    -> TRẢ VỀ NUMBER
 
-4. TRƯỜNG PHỤ LỤC (type=string hoặc number):
-   - Nếu type=string: lấy text sau chữ "Phụ lục" hoặc "phụ lục"
+4. TRƯỜNG PHỤ LỤC (type=string):
+    - Lấy text sau chữ "Phụ lục" hoặc "phụ lục"
      Ví dụ: "Phụ lục 01" → "01"
-   - Nếu type=number: chỉ lấy số
-     Ví dụ: "phụ lục 01" → 1
+     Ví dụ: "phụ lục 02" -> "02"
      -> TRẢ VỀ STRING
 
 5. TRƯỜNG ĐIỀU (type=string):
@@ -182,7 +184,7 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
    -> TRẢ VỀ STRING
 
 8. TRƯỜNG LIÊN QUAN ĐẾN Tài khoản số, Mã số công ty, Giá, Thời gian → TRẢ VỀ NUMBER (bỏ dấu phân cách)
-""",
+"""
 }
 
 def _build_prompt_static_don_gian(schema_template: str) -> str:
@@ -231,6 +233,62 @@ Schema:
 {schema_template}"""
 
 
+def _build_prompt_static_tieng_anh(schema_template: str) -> str:
+    """Static portion of the mua_ban_tieng_anh prompt — suitable for caching."""
+    return f"""You are a contract analysis expert. Read the contract carefully and fill in the JSON schema below.
+
+    EXTRACTION RULES FOR ENGLISH SALES CONTRACT:
+
+    1. MONETARY / AMOUNT FIELDS (type=number):
+    - Extract the numeric value only, strip currency symbols (USD, $, etc.)
+    - Example: "$10,000.00" → 10000
+    - Example: "USD 5,000" → 5000
+    - Remove thousand separators
+    -> RETURN NUMBER
+
+    2. PERCENTAGE FIELDS (type=number):
+    - Extract the number only, strip the % symbol
+    - Example: "10% of contract value" → 10
+    -> RETURN NUMBER
+
+    3. TIME / DAYS / MONTHS FIELDS (type=number):
+    - Extract the number only, strip units (days, months, weeks...)
+    - Example: "30 days written notice" → 30
+    - Example: "6 months" → 6
+    -> RETURN NUMBER
+
+    4. DATE FIELDS (type=string):
+    - Keep the full date as written in the document
+    - Example: "April 7, 2026" → "April 7, 2026"
+    -> RETURN STRING
+
+    5. NAME, ADDRESS, DESCRIPTION FIELDS (type=string):
+    - Extract verbatim from the document
+    -> RETURN STRING
+
+    6. "Goods and price" FIELD (type=object):
+    - Extract as a JSON object with an "items" array
+    - Each item must have: description, quantity (integer), price_per_unit (number), total_price (number)
+    - Example:
+        {
+        "items": [
+            {"description": "Laptop Model X", "quantity": 10, "price_per_unit": 500, "total_price": 5000}
+        ]
+        }
+    -> RETURN OBJECT (nested JSON)
+
+    GENERAL RULES:
+    - Keep field names (keys) unchanged, only replace the values
+    - If information is not found → use ""
+    - Fields with type=number: return a number (integer or float), NO quotes
+    - Fields with type=string: return a quoted string
+    - The "Goods and price" field must be a JSON object (not a string)
+    - Return pure JSON only, NO markdown, NO explanation
+
+    Schema:
+    {schema_template}"""
+
+
 def _build_prompt(contract_text: str, schema_template: str, contract_type: str) -> str:
     if contract_type == "mua_ban_don_gian":
         return f"""
@@ -271,6 +329,30 @@ def _build_prompt(contract_text: str, schema_template: str, contract_type: str) 
 
     # mua_ban_quoc_te — rules chi tiết theo từng pattern field
     extraction_rules = EXTRACTION_RULES.get(contract_type, "")
+
+    if contract_type == "mua_ban_tieng_anh":
+        return f"""
+    You are a contract analysis expert. Read the contract carefully and fill in the JSON schema.
+
+    {extraction_rules}
+
+    GENERAL RULES:
+    - Keep field names (keys) unchanged, only replace the values
+    - If information is not found → use ""
+    - Fields with type=number: return a number (integer or float), NO quotes
+    - Fields with type=string: return a quoted string
+    - The "Goods and price" field must be a JSON object (not a string)
+    - Return pure JSON only, NO markdown, NO explanation
+
+    Schema (keep keys, fill values only):
+    {schema_template}
+
+    Contract content:
+    {contract_text}
+
+    Extracted JSON:
+    """
+
     return f"""
     Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và thực hiện 2 bước:
 
@@ -308,99 +390,148 @@ def _build_prompt(contract_text: str, schema_template: str, contract_type: str) 
     """
 
 
-def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
+def check_typos(contract_text: str, contract_type: str) -> list[dict]:
     """
-    Split schema into 2 halves, call Bedrock in parallel with ThreadPoolExecutor,
-    then merge results. Falls back to single call if parallel fails.
+    Use LLM to find misspelled words in the contract text.
+    Returns list of {"wrong": str, "correct": str}.
+    Only checks individual words — not grammar or meaning.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     from time import perf_counter
 
-    keys = list(schema.keys())
-    mid  = len(keys) // 2
-    chunks = [
-        {k: schema[k] for k in keys[:mid]},
-        {k: schema[k] for k in keys[mid:]},
+    if contract_type == "mua_ban_tieng_anh":
+        prompt = f"""
+        You are a spell-checker. Read the contract below and find all misspelled words.
+
+        Rules:
+        - Check individual words only (spelling mistakes, not grammar or meaning)
+        - Proper nouns, company names, abbreviations, numbers → SKIP
+        - Only flag words that are clearly misspelled
+        - Return a JSON array. Each item: {{"wrong": "<misspelled word as it appears>", "correct": "<correct spelling>"}}
+        - If no typos found, return []
+        - Return pure JSON array only, NO markdown, NO explanation
+
+        Contract:
+        {contract_text[:6000]}
+
+        JSON:"""
+    else:
+        prompt = f"""
+        Bạn là chuyên gia kiểm tra chính tả tiếng Việt. Đọc hợp đồng bên dưới và tìm tất cả các từ bị viết sai chính tả.
+
+        Quy tắc:
+        - Chỉ kiểm tra lỗi chính tả từng từ (sai dấu, sai chữ cái) — KHÔNG kiểm tra ngữ pháp hay ý nghĩa
+        - Tên riêng, tên công ty, viết tắt, số → BỎ QUA
+        - Chỉ đánh dấu từ rõ ràng bị sai chính tả
+        - Trả về JSON array. Mỗi phần tử: {{"wrong": "<từ sai như trong văn bản>", "correct": "<từ đúng>"}}
+        - Nếu không có lỗi, trả về []
+        - Chỉ trả về JSON array thuần túy, KHÔNG markdown, KHÔNG giải thích
+
+        Nội dung hợp đồng:
+        {contract_text[:6000]}
+
+        JSON:"""
+
+    t0 = perf_counter()
+    response = client.converse(
+        modelId=MODEL_ID_EXTRACT,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+    )
+    raw = response["output"]["message"]["content"][0]["text"].strip()
+    print(f"  [typo] LLM response: {perf_counter() - t0:.2f}s")
+
+    # Parse JSON array
+    try:
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        start = raw.find("[")
+        end   = raw.rfind("]") + 1
+        if start == -1 or end == 0:
+            return []
+        result = json.loads(raw[start:end])
+        if isinstance(result, list):
+            return [r for r in result if r.get("wrong") and r.get("correct")]
+    except Exception as e:
+        print(f"  [WARN] typo parse error: {e}")
+    return []
+
+
+def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
+    """
+    Single LLM call with full schema — avoids missing fields caused by context split.
+    Retries up to 3 times on JSON parse failure.
+    """
+    from time import perf_counter
+
+    schema_template  = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+    extraction_rules = EXTRACTION_RULES
+
+    if contract_type == "mua_ban_don_gian":
+        static_text = _build_prompt_static_don_gian(schema_template)
+    elif contract_type == "mua_ban_tieng_anh":
+        static_text = _build_prompt_static_tieng_anh(schema_template)
+    else:
+        static_text = _build_prompt_static_quoc_te(schema_template, extraction_rules)
+
+    dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"text": static_text},
+                {"cachePoint": {"type": "default"}},
+                {"text": dynamic_text},
+            ],
+        }
     ]
 
-    def _call_chunk(chunk: dict, chunk_idx: int) -> dict:
-        t0 = perf_counter()
-        schema_template = json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
-        extraction_rules = EXTRACTION_RULES.get(contract_type, "")
+    for attempt in range(1, 4):
+        t_call = perf_counter()
+        stream_resp = client.converse_stream(modelId=MODEL_ID, messages=messages)
 
-        if contract_type == "mua_ban_don_gian":
-            static_text = _build_prompt_static_don_gian(schema_template)
-        else:
-            static_text = _build_prompt_static_quoc_te(schema_template, extraction_rules)
+        raw_chunks  = []
+        first_token = None
+        for event in stream_resp["stream"]:
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"]["delta"]
+                if "text" in delta:
+                    if first_token is None:
+                        first_token = perf_counter()
+                        print(f"    [4] time to first token: {first_token - t_call:.2f}s")
+                    raw_chunks.append(delta["text"])
 
-        dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+        raw_text = "".join(raw_chunks).strip()
+        print(f"    [4] stream complete ({len(raw_text)} chars): {perf_counter() - t_call:.2f}s")
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"text": static_text},
-                    {"cachePoint": {"type": "default"}},
-                    {"text": dynamic_text},
-                ],
-            }
-        ]
+        try:
+            result = _parse_json_from_response(raw_text)
+            print(f"    [4] extracted {len(result)} fields")
+            return result
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  [WARN] Attempt {attempt}/3 — {e}")
+            if attempt < 3:
+                messages.append({"role": "assistant", "content": [{"text": raw_text}]})
+                messages.append({"role": "user", "content": [{"text": (
+                    f"JSON bị lỗi: {e}. Trả lại JSON hợp lệ, chỉ sửa cú pháp, không đổi nội dung, không markdown."
+                )}]})
 
-        t_prompt = perf_counter()
-        print(f"    [4.{chunk_idx}] prompt build: {t_prompt - t0:.2f}s")
-
-        for attempt in range(1, 4):
-            t_call = perf_counter()
-            stream_resp = client.converse_stream(modelId=MODEL_ID, messages=messages)
-
-            raw_chunks = []
-            first_token = None
-            for event in stream_resp["stream"]:
-                if "contentBlockDelta" in event:
-                    delta = event["contentBlockDelta"]["delta"]
-                    if "text" in delta:
-                        if first_token is None:
-                            first_token = perf_counter()
-                            print(f"    [4.{chunk_idx}] time to first token: {first_token - t_call:.2f}s")
-                        raw_chunks.append(delta["text"])
-
-            t_done = perf_counter()
-            raw_text = "".join(raw_chunks).strip()
-            print(f"    [4.{chunk_idx}] stream complete ({len(raw_text)} chars): {t_done - t_call:.2f}s")
-
-            try:
-                result = _parse_json_from_response(raw_text)
-                print(f"    [4.{chunk_idx}] total: {perf_counter() - t0:.2f}s ({len(result)} fields)")
-                return result
-            except (ValueError, json.JSONDecodeError) as e:
-                print(f"  [WARN] Attempt {attempt}/3 — {e}")
-                if attempt < 3:
-                    messages.append({"role": "assistant", "content": [{"text": raw_text}]})
-                    messages.append({"role": "user", "content": [{"text": (
-                        f"JSON bị lỗi: {e}. Trả lại JSON hợp lệ, chỉ sửa cú pháp, không đổi nội dung, không markdown."
-                    )}]})
-
-        raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = {executor.submit(_call_chunk, chunk, i + 1): chunk for i, chunk in enumerate(chunks)}
-        for future in as_completed(futures):
-            results.update(future.result())
-
-    return results
+    raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
 
 # Full pipeline
 
-def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
+def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str, list[dict]]:
     """
     Upload → Parse → LLM classify → Load ContractSchema (DynamoDB)
-    → Generate dynamic prompt → LLM extract → Validate → Return results
+    → Generate dynamic prompt → LLM extract + typo check (parallel) → Validate → Return results
 
-    Returns: (validation_results, extracted_data, raw_text, contract_type)
+    Returns: (validation_results, extracted_data, raw_text, contract_type, typos)
     """
     from time import perf_counter
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _step(label: str, t0: float) -> float:
         t1 = perf_counter()
@@ -427,9 +558,15 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
 
     schema = get_extraction_schema(contract_type)
     print(f"    → {len(schema)} fields loaded")
-    t0 = _step(f"[4] Generate dynamic prompt + LLM extract...", t0)
+    t0 = _step(f"[4] Generate dynamic prompt + LLM extract + typo check (parallel)...", t0)
 
-    extracted = extract_contract_info(contract_text, schema, contract_type)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_extract = executor.submit(extract_contract_info, contract_text, schema, contract_type)
+        future_typos   = executor.submit(check_typos, contract_text, contract_type)
+        extracted = future_extract.result()
+        typos     = future_typos.result()
+
+    print(f"    → {len(typos)} typos found")
     with open(extracted_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, ensure_ascii=False, indent=2)
     print(f"    → Saved: {extracted_path}")
@@ -444,7 +581,7 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"    Total: {total:.2f}s")
     print(f"{'='*50}")
 
-    return results, extracted, contract_text, contract_type
+    return results, extracted, contract_text, contract_type, typos
 
 
 if __name__ == "__main__":

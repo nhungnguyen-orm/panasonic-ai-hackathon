@@ -10,7 +10,8 @@ load_dotenv()
 
 AWS_PROFILE       = os.getenv("AWS_PROFILE")
 AWS_REGION        = os.getenv("AWS_REGION")
-SCHEMA_TABLE_NAME = "PanasonicContractSchema"
+# SCHEMA_TABLE_NAME = "PanasonicContractSchema"
+SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
 session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 dynamodb_resource = session.resource("dynamodb")
@@ -54,6 +55,8 @@ def is_number(value) -> bool:
 TYPE_CHECKERS = {
     "number": is_number,
     "string": lambda v: isinstance(v, str),
+    "object": lambda v: isinstance(v, dict),
+    "array":  lambda v: isinstance(v, list),
 }
 
 
