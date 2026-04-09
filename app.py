@@ -15,59 +15,14 @@ st.set_page_config(
 # ── Global styles ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Hide default streamlit header padding */
     .block-container { padding-top: 1rem; margin-top: 20px; }
-
-    /* Header bar */
-    .app-header {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 12px 24px;
-        background: #fff;
-        border-bottom: 2px solid #0057a8;
-        margin-bottom: 24px;
-        border-radius: 8px;
-    }
-    .app-header .title-block h1 {
-        margin: 0;
-        font-size: 22px;
-        font-weight: 700;
-        color: #0057a8;
-    }
-    .app-header .title-block p {
-        margin: 2px 0 0;
-        font-size: 13px;
-        color: #666;
-    }
-
-    /* Upload zone */
-    .upload-card {
-        background: #f8faff;
-        border: 1.5px dashed #0057a8;
-        border-radius: 10px;
-        padding: 28px 32px;
-        margin-bottom: 16px;
-    }
-
-    /* Metric cards */
     div[data-testid="metric-container"] {
         background: #f0f5ff;
         border: 1px solid #d0e0ff;
         border-radius: 10px;
         padding: 12px 16px;
     }
-
-    /* Error container */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 8px !important;
-    }
-
-    /* Footer */
-    .app-footer {
-       display: flex;
-       justify-content: center;
-    }
+    div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 8px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,7 +33,7 @@ with hcol1:
 with hcol2:
     st.markdown("""
         <div style="padding-top:8px;">
-            <h1 style="margin:0;font-size:26px; text-transform: uppercase; font-weight:700;color:#0057a8;">
+            <h1 style="margin:0;font-size:26px;text-transform:uppercase;font-weight:700;color:#0057a8;">
                 Automated Contract Checker
             </h1>
             <p style="margin:4px 0 0;font-size:13px;color:#666;">
@@ -97,7 +52,7 @@ with st.container():
             "Select contract file (.docx)",
             type=["docx"],
             label_visibility="collapsed",
-            help="Supports simple purchase contracts and international trade contracts"
+            help="Supports simple purchase contracts and international trade contracts",
         )
     with ucol2:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -151,22 +106,21 @@ c1.metric("Contract Type", contract_type.replace("_", " ").title())
 c2.metric("Total Fields", len(results))
 c3.metric("✅ Valid", ok_count)
 c4.metric("❌ Errors", len(errors), delta=f"-{len(errors)}" if errors else None, delta_color="inverse")
-c5, c6 = st.columns([1, 3])
-# c5.metric("⚠️ Typos", len(typos))
 st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
 
 # ── Highlight helpers ─────────────────────────────────────────────────────────
-# Build rules from validation results using LLM-provided line_hints
-error_rules: list[tuple] = []   # (line_hint, value, field, reason) — wrong value
-missing_rules: list[tuple] = [] # (line_hint, field, reason) — missing value
+error_rules: list[tuple]   = []  # (hint, value, field, reason)
+missing_rules: list[tuple] = []  # (hint, field, reason)
 
 for r in errors:
-    val   = r["value"]
-    hint  = r.get("line_hint", "").strip()
-    # Always derive hint from field name if not provided
+    val  = r["value"]
+    hint = r.get("line_hint", "").strip()
     if not hint:
         parts = r["field"].split(" - ")
         hint  = re.sub(r"\s*\(.*?\)\s*$", "", parts[-1]).strip()
+    # For object item errors, value is a dict — highlight the bad quantity value
+    if isinstance(val, dict):
+        val = val.get("quantity", "")
     if val is not None and str(val).strip():
         error_rules.append((hint, str(val), r["field"], r["reason"] or ""))
     else:
@@ -186,20 +140,23 @@ def highlight_line(line: str, wrong_rules: list, miss_rules: list, typo_list: li
         escaped_val = html.escape(val)
         if escaped_val not in escaped:
             continue
-        # If we have a hint, verify this line matches it (use raw hint for text matching)
         if hint and hint[:30].lower() not in line.lower():
             continue
         tooltip = html.escape(f"{field}: {reason}", quote=True)
-        escaped = escaped.replace(escaped_val,
+        escaped = escaped.replace(
+            escaped_val,
             f'<mark style="background:#ff4d4f;color:#fff;border-radius:3px;'
-            f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_val}</mark>', 1)
+            f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_val}</mark>',
+            1,
+        )
         had_wrong = True
 
     # Missing value → red left border on the line matching the hint
     if not had_wrong:
         for hint, field, reason in miss_rules:
-            # Use raw hint for text matching, but never inject hint into HTML
-            if hint and hint[:40].lower() in line.lower():
+            if not hint:
+                continue
+            if hint.lower() in line.lower():
                 tooltip = html.escape(f"{field}: {reason}", quote=True)
                 escaped = (
                     f'<span title="{tooltip}" style="background:#fff1f0;'
@@ -218,9 +175,12 @@ def highlight_line(line: str, wrong_rules: list, miss_rules: list, typo_list: li
         escaped_wrong = html.escape(wrong)
         if escaped_wrong in escaped:
             tooltip = html.escape(f'Typo: "{wrong}" → "{correct}"', quote=True)
-            escaped = escaped.replace(escaped_wrong,
+            escaped = escaped.replace(
+                escaped_wrong,
                 f'<mark style="background:#fadb14;color:#000;border-radius:3px;'
-                f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_wrong}</mark>', 1)
+                f'padding:1px 4px;cursor:help;" title="{tooltip}">{escaped_wrong}</mark>',
+                1,
+            )
             had_typo = True
 
     return escaped, had_wrong, had_missing, had_typo
@@ -232,7 +192,7 @@ left, right = st.columns([3, 2], gap="large")
 with left:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
-        f'<span style="font-size:24px;text-transform: uppercase;font-weight:600;color:#fff;">📋 Contract Content</span>'
+        f'<span style="font-size:24px;text-transform:uppercase;font-weight:600;color:#fff;">📋 Contract Content</span>'
         f'<span style="font-size:13px;color:#888;background:#f0f0f0;padding:2px 10px;'
         f'border-radius:12px;">{html.escape(filename)}</span>'
         f'</div>',
@@ -242,7 +202,7 @@ with left:
     if not errors:
         st.success("No errors detected in the contract.")
 
-    lines = contract_text.split("\n")
+    lines      = contract_text.split("\n")
     html_lines = []
 
     for line in lines:
@@ -277,7 +237,7 @@ with left:
 
 with right:
     st.markdown(
-        '<div style="text-transform: uppercase;font-size:22px;font-weight:600;color:#fff;margin-bottom:4px;">Error List</div>',
+        '<div style="text-transform:uppercase;font-size:22px;font-weight:600;color:#fff;margin-bottom:4px;">Error List</div>',
         unsafe_allow_html=True,
     )
 
@@ -286,31 +246,37 @@ with right:
     else:
         PAGE_SIZE   = 4
         total_pages = (len(errors) + PAGE_SIZE - 1) // PAGE_SIZE
-        page        = st.session_state.get("error_page", 1)
 
         if total_pages > 1:
-            st.caption(f"Page {page}/{total_pages} · {len(errors)} errors")
+            # Handle navigation — update session_state immediately so buttons render correctly
             cols = st.columns(total_pages + 2)
             if cols[0].button("‹", key="prev_page"):
-                page = max(1, page - 1)
+                st.session_state["error_page"] = max(1, st.session_state.get("error_page", 1) - 1)
+                st.rerun()
             for i in range(1, total_pages + 1):
-                if cols[i].button(str(i), key=f"page_{i}", type="primary" if i == page else "secondary"):
-                    page = i
+                if cols[i].button(str(i), key=f"page_{i}",
+                                  type="primary" if i == st.session_state.get("error_page", 1) else "secondary"):
+                    st.session_state["error_page"] = i
+                    st.rerun()
             if cols[total_pages + 1].button("›", key="next_page"):
-                page = min(total_pages, page + 1)
-            st.session_state["error_page"] = page
+                st.session_state["error_page"] = min(total_pages, st.session_state.get("error_page", 1) + 1)
+                st.rerun()
+            st.caption(f"Page {st.session_state.get('error_page', 1)}/{total_pages} · {len(errors)} errors")
         else:
             st.caption(f"{len(errors)} error(s)")
 
+        page  = st.session_state.get("error_page", 1)
         start = (page - 1) * PAGE_SIZE
         for r in errors[start: start + PAGE_SIZE]:
-            is_missing = r["value"] is None or str(r["value"]).strip() == ""
+            val        = r["value"]
+            is_missing = val is None or (isinstance(val, str) and val.strip() == "")
             with st.container(border=True):
                 st.markdown(f"**{r['field']}**")
                 if is_missing:
                     st.markdown(f":red[{r['reason']}]")
                 else:
-                    st.markdown(f"Value: `{r['value']}`  \n:red[{r['reason']}]")
+                    display_val = val.get("quantity", str(val)) if isinstance(val, dict) else val
+                    st.markdown(f"Value: `{display_val}`  \n:red[{r['reason']}]")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 import base64

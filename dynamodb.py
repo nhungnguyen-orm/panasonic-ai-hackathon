@@ -72,13 +72,16 @@ def seed_schema_table(schema: dict, contract_type: str):
 
     with table.batch_writer() as batch:
         for order, (field_name, meta) in enumerate(schema.items()):
-            batch.put_item(Item={
+            item = {
                 "contract_type": contract_type,
                 "field_name":    field_name,
                 "field_order":   Decimal(order),
                 "type":          meta.get("type", "string"),
                 "required":      meta.get("required", False),
-            })
+            }
+            if meta.get("line_hint"):
+                item["line_hint"] = meta["line_hint"]
+            batch.put_item(Item=item)
 
     print(f"  → Seeded {len(schema)} fields for '{contract_type}'.")
 

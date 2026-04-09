@@ -8,29 +8,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# AWS_PROFILE       = os.getenv("AWS_PROFILE")
-# AWS_REGION        = os.getenv("AWS_REGION")
-# SCHEMA_TABLE_NAME = "PanasonicContractSchema"
 SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
-# session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 
 
-# ── Fetch schema for a specific contract type ─────────────────────────────────
+# ── Fetch schema ──────────────────────────────────────────────────────────────
 
 def fetch_schema_from_dynamodb(contract_type: str) -> list[dict]:
-    """
-    Query only the fields belonging to the given contract_type.
-    Returns list sorted by field_order.
-    """
     table    = dynamodb_resource.Table(SCHEMA_TABLE_NAME)
-    response = table.query(
-        KeyConditionExpression=Key("contract_type").eq(contract_type)
-    )
-    items = response.get("Items", [])
+    response = table.query(KeyConditionExpression=Key("contract_type").eq(contract_type))
+    items    = response.get("Items", [])
 
-    # Handle DynamoDB pagination
     while "LastEvaluatedKey" in response:
         response = table.query(
             KeyConditionExpression=Key("contract_type").eq(contract_type),
@@ -60,13 +49,49 @@ TYPE_CHECKERS = {
 }
 
 
+# ── Object item validation ────────────────────────────────────────────────────
+
+def _validate_object_items(field_name: str, value: dict) -> list[dict]:
+    """
+    Validate each item inside value["items"].
+    Returns one result entry per item with corrected=True/False.
+    """
+    results = []
+    items   = value.get("items", [])
+    if not isinstance(items, list):
+        return results
+
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        desc   = item.get("description", f"item[{i}]")
+        qty    = item.get("quantity")
+        errors = []
+
+        if qty is None:
+            errors.append("quantity missing")
+        elif not isinstance(qty, (int, float)):
+            errors.append(f"quantity wrong type - expected number, got '{qty}'")
+        else:
+            try:
+                if float(qty) < 1:
+                    errors.append("quantity must be greater than 0")
+            except (TypeError, ValueError):
+                errors.append(f"quantity wrong type - expected number, got '{qty}'")
+
+        results.append({
+            "field":     f"{field_name} - {desc}",
+            "value":     item,
+            "corrected": len(errors) == 0,
+            "reason":    "; ".join(errors) if errors else None,
+        })
+
+    return results
+
+
 # ── Core validation ───────────────────────────────────────────────────────────
 
 def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
-    """
-    Compare each extracted value against the expected type from DynamoDB.
-    Output: [{ "field", "value", "corrected", "reason" }]
-    """
     results = []
 
     for field_def in schema_fields:
@@ -81,6 +106,7 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
                 "value":     value,
                 "corrected": False,
                 "reason":    "missing required field" if required else "missing field",
+                "line_hint": field_def.get("line_hint", ""),
             })
             continue
 
@@ -91,13 +117,24 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
                 "value":     value,
                 "corrected": False,
                 "reason":    f"wrong type - expected {field_type}",
+                "line_hint": field_def.get("line_hint", ""),
             })
+        elif field_type == "object" and isinstance(value, dict):
+            results.append({
+                "field":     field_name,
+                "value":     value,
+                "corrected": True,
+                "reason":    None,
+                "line_hint": "",
+            })
+            results.extend(_validate_object_items(field_name, value))
         else:
             results.append({
                 "field":     field_name,
                 "value":     value,
                 "corrected": True,
                 "reason":    None,
+                "line_hint": "",
             })
 
     return results
@@ -106,10 +143,6 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def validate_contract(extracted: dict, contract_type: str, output_path: str) -> list[dict]:
-    """
-    Fetch schema for contract_type from DynamoDB, validate extracted data,
-    save results to output_path, and return results array.
-    """
     schema_fields = fetch_schema_from_dynamodb(contract_type)
 
     if not schema_fields:

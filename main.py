@@ -10,13 +10,10 @@ from validator import validate_contract
 
 load_dotenv()
 
-# AWS_PROFILE = os.getenv("AWS_PROFILE")
-# AWS_REGION  = os.getenv("AWS_REGION")
 MODEL_ID         = os.getenv("MODEL_ID")
 MODEL_ID_EXTRACT = os.getenv("MODEL_ID_EXTRACT")
 
-# session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-client  = boto3.client("bedrock-runtime", region_name='ap-southeast-2')
+client = boto3.client("bedrock-runtime", region_name='ap-southeast-2')
 
 JSON_DIR = "json"
 
@@ -62,12 +59,7 @@ def read_docx(file_path: str) -> str:
     return "\n".join(parts)
 
 
-# Step 2: LLM classify contract_type
 def detect_contract_type(contract_text: str) -> str:
-    """
-    Send first 3000 chars to Bedrock to classify into a known contract_type.
-    Returns a key from CONTRACT_REGISTRY.
-    """
     type_list = "\n".join(
         f'- "{k}": {desc}'
         for k, desc in CONTRACT_TYPE_DESCRIPTIONS.items()
@@ -107,8 +99,6 @@ def detect_contract_type(contract_text: str) -> str:
     return detected
 
 
-# Step 3: Load ContractSchema from DynamoDB → Generate dynamic prompt
-
 def _parse_json_from_response(raw_text: str) -> dict:
     from json_repair import repair_json
 
@@ -133,69 +123,70 @@ def _parse_json_from_response(raw_text: str) -> dict:
         raise ValueError(f"Cannot repair JSON: {candidate[:200]}")
 
 
-# Step 4: LLM extract
-EXTRACTION_RULES = {
-    """
+# ── Extraction rules for mua_ban_quoc_te ─────────────────────────────────────
+
+EXTRACTION_RULES_QUOC_TE = """
 QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 
 1. TRƯỜNG Số tiền / Giá trị / Giá cả (type=number):
    - Chỉ lấy phần số, bỏ đơn vị tiền tệ (USD, VNĐ...) và điều kiện giao hàng (CIF, FOB...)
    - Ví dụ: "100.000 USD CIF Hải Phòng" → 100000
    - Ví dụ: "2.000 USD/bộ" → 2000
-   - Ví dụ: "10.000 USD" → 10000
    - Bỏ dấu chấm/phẩy phân cách hàng nghìn
    -> TRẢ VỀ NUMBER
 
 2. TRƯỜNG TỶ LỆ % (type=number):
-   - Chỉ lấy số, bỏ ký hiệu %
-   - Ví dụ: "10% giá trị hợp đồng" → 10
+   - Chỉ lấy số, bỏ ký hiệu %, 
    - Ví dụ: "0.5% một tuần" → 0.5
-   - Ví dụ: "5%" → 5
+   - Ví dụ: "110% giá trị hợp đồng" → 110
    -> TRẢ VỀ NUMBER
 
 3. TRƯỜNG THỜI GIAN / SỐ NGÀY / SỐ THÁNG (type=number):
-   - Chỉ lấy con số, bỏ đơn vị (ngày, tháng, tuần...)
+   - Chỉ lấy con số, bỏ đơn vị phía sau
    - Ví dụ: "60 ngày kể từ ngày bên bán nhận được L/C" → 60
-   - Ví dụ: "15 ngày kể từ khi nhận được khiếu nại" → 15
-   - Ví dụ: "10 ngày sau khi ký hợp đồng" → 10
    - Ví dụ: "06 tháng" → 6
-   - Ví dụ: "24 tháng" → 24
    -> TRẢ VỀ NUMBER
 
 4. TRƯỜNG PHỤ LỤC (type=string):
-    - Lấy text sau chữ "Phụ lục" hoặc "phụ lục"
-     Ví dụ: "Phụ lục 01" → "01"
-     Ví dụ: "phụ lục 02" -> "02"
-     -> TRẢ VỀ STRING
+   - Lấy text sau chữ "Phụ lục" hoặc "phụ lục"
+   - Ví dụ: "Phụ lục 01" → "01"
+   -> TRẢ VỀ STRING
 
 5. TRƯỜNG ĐIỀU (type=string):
    - Lấy text sau chữ "điều" hoặc "Điều"
-   - Ví dụ: "điều 01" → "01"
    - Ví dụ: "Điều 5" → "5"
+   - Ví dụ: "điều 5" → "5"
+    - Ví dụ: "Điều 01" → "1"
+   - Ví dụ: "điều 01" → "1"
    -> TRẢ VỀ STRING
 
 6. TRƯỜNG NGÀY THÁNG NĂM (type=string):
    - Giữ nguyên định dạng đầy đủ
-   - Ví dụ: "07 tháng 04 năm 2026" → "07 tháng 04 năm 2026"
    -> TRẢ VỀ STRING
 
 7. TRƯỜNG TÊN, ĐỊA CHỈ, MÔ TẢ (type=string):
    - Lấy nguyên văn từ tài liệu
    -> TRẢ VỀ STRING
 
-8. TRƯỜNG LIÊN QUAN ĐẾN Tài khoản số, Mã số công ty, Giá, Thời gian → TRẢ VỀ NUMBER (bỏ dấu phân cách)
+8. TRƯỜNG THỜI GIAN (type=number):
+    - Chỉ lấy con số, bỏ các đơn vị phía sau
+    - Ví dụ: "15 ngày kể từ khi nhận được khiếu nại" -> 15
+    -> TRẢ VỀ NUMBER
+
+8. Tài khoản số, Mã số công ty, Giá, Thời gian → TRẢ VỀ NUMBER (bỏ dấu phân cách)
 
 9. TRÍCH XUẤT TRUNG THỰC KHI THÔNG TIN BỊ THIẾU/CẮT ĐỨT:
-   - Nếu câu văn bị cắt đứt hoặc thiếu thông tin (ví dụ: "danh mục vật tư ở Phụ lục" không có số),
-     hãy điền giá trị gần nhất có thể suy ra từ ngữ cảnh xung quanh.
-   - Ví dụ: "danh mục vật tư ở Phụ lục" (thiếu số) → tìm số phụ lục được đề cập gần nhất trong Điều đó
-   - KHÔNG để trống ("") nếu có thể suy ra giá trị từ ngữ cảnh
-   - Nếu thực sự không thể suy ra → để ""
+   - LUÔN lấy giá trị thực tế, KỂ CẢ KHI SAI
+   - Ví dụ: "Tổng giá trị hợp đồng là: abc USD" → "abc"
+   - Ví dụ: "Giá cả: bộ" → "bộ"
+   - Ví dụ: "theo quy định tại điều trong hợp đồng này" → "điều"
+   - CHỈ để "" khi thực sự không có thông tin nào liên quan
 """
-}
+
+
+# ── Static prompt builders ────────────────────────────────────────────────────
 
 def _build_prompt_static_don_gian(schema_template: str) -> str:
-    """Static portion of the mua_ban_don_gian prompt — suitable for caching."""
     return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và thực hiện 2 bước:
 
 BƯỚC 1 - TRÍCH XUẤT TỰ DO:
@@ -223,11 +214,10 @@ Schema:
 {schema_template}"""
 
 
-def _build_prompt_static_quoc_te(schema_template: str, extraction_rules: str) -> str:
-    """Static portion of the mua_ban_quoc_te prompt — suitable for caching."""
+def _build_prompt_static_quoc_te(schema_template: str) -> str:
     return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và điền vào schema JSON.
 
-{extraction_rules}
+{EXTRACTION_RULES_QUOC_TE}
 
 QUY TẮC CHUNG:
 - Giữ nguyên tên trường (key), chỉ thay thế giá trị (value)
@@ -241,180 +231,76 @@ Schema:
 
 
 def _build_prompt_static_tieng_anh(schema_template: str) -> str:
-    """Static portion of the mua_ban_tieng_anh prompt — suitable for caching."""
     return f"""You are a contract analysis expert. Read the contract carefully and fill in the JSON schema below.
 
-    EXTRACTION RULES FOR ENGLISH SALES CONTRACT:
+EXTRACTION RULES FOR ENGLISH SALES CONTRACT:
 
-    1. MONETARY / AMOUNT FIELDS (type=number):
-    - Extract the numeric value only, strip currency symbols (USD, $, etc.)
-    - Example: "$10,000.00" → 10000
-    - Example: "USD 5,000" → 5000
-    - Remove thousand separators
-    -> RETURN NUMBER
+1. MONETARY / AMOUNT FIELDS (type=number):
+   - Extract the numeric value only, strip currency symbols (USD, $, etc.)
+   - Example: "$10,000.00" → 10000, "USD 5,000" → 5000
+   - Remove thousand separators
+   -> RETURN NUMBER
 
-    2. PERCENTAGE FIELDS (type=number):
-    - Extract the number only, strip the % symbol
-    - Example: "10% of contract value" → 10
-    -> RETURN NUMBER
+2. PERCENTAGE FIELDS (type=number):
+   - Extract the number only, strip the % symbol
+   -> RETURN NUMBER
 
-    3. TIME / DAYS / MONTHS FIELDS (type=number):
-    - Extract the number only, strip units (days, months, weeks...)
-    - Example: "30 days written notice" → 30
-    - Example: "6 months" → 6
-    -> RETURN NUMBER
+3. TIME / DAYS / MONTHS FIELDS (type=number):
+   - Extract the number only, strip units (days, months, weeks...)
+   - Example: "30 days written notice" → 30
+   -> RETURN NUMBER
 
-    4. DATE FIELDS (type=string):
-    - Keep the full date as written in the document
-    - Example: "April 7, 2026" → "April 7, 2026"
-    -> RETURN STRING
+4. QUANTITY FIELD (inside "Goods and price" items) — CRITICAL:
+   - Extract the EXACT value as written — do NOT convert or interpret
+   - If written as a word (e.g. "Fifty", "Ten") → keep as string: "Fifty"
+   - If written as a number (e.g. 100, -50) → keep as-is: 100 or -50
+   - Do NOT convert "Fifty" → 50, do NOT fix negative values
+   - The validator will check correctness — extract honestly only
 
-    5. NAME, ADDRESS, DESCRIPTION FIELDS (type=string):
-    - Extract verbatim from the document
-    -> RETURN STRING
+5. DATE FIELDS (type=string):
+   - Keep the full date as written: "April 7, 2026" → "April 7, 2026"
+   -> RETURN STRING
 
-    6. "Goods and price" FIELD (type=object):
-    - Extract as a JSON object with an "items" array
-    - Each item must have: description, quantity (integer), price_per_unit (number), total_price (number)
-    - Example:
-        {{
-        "items": [
-            {{"description": "Laptop Model X", "quantity": 10, "price_per_unit": 500, "total_price": 5000}}
-        ]
-        }}
-    -> RETURN OBJECT (nested JSON)
+6. NAME, ADDRESS, DESCRIPTION FIELDS (type=string):
+   - Extract verbatim from the document
+   -> RETURN STRING
 
-    GENERAL RULES:
-    - Keep field names (keys) unchanged, only replace the values
-    - If information is not found → use ""
-    - Fields with type=number: return a number (integer or float), NO quotes
-    - Fields with type=string: return a quoted string
-    - The "Goods and price" field must be a JSON object (not a string)
-    - Return pure JSON only, NO markdown, NO explanation
+7. "Goods and price" FIELD (type=object):
+   - Extract as a JSON object with an "items" array
+   - Each item: description (string), quantity (as-is), price_per_unit (number), total_price (number)
+   - Example:
+     {{
+       "items": [
+         {{"description": "Laptop Model X", "quantity": 10, "price_per_unit": 500, "total_price": 5000}}
+       ]
+     }}
+   -> RETURN OBJECT (nested JSON)
 
-    Schema:
-    {schema_template}"""
+GENERAL RULES:
+- Keep field names (keys) unchanged, only replace the values
+- If information is not found → use ""
+- Fields with type=number: return a number (integer or float), NO quotes
+- Fields with type=string: return a quoted string
+- The "Goods and price" field must be a JSON object (not a string)
+- Return pure JSON only, NO markdown, NO explanation
 
-
-def _build_prompt(contract_text: str, schema_template: str, contract_type: str) -> str:
-    if contract_type == "mua_ban_don_gian":
-        return f"""
-    Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và thực hiện 2 bước:
-
-    BƯỚC 1 - TRÍCH XUẤT TỰ DO:
-    Đọc toàn bộ hợp đồng và liệt kê TẤT CẢ thông tin có trong tài liệu.
-
-    BƯỚC 2 - MAP VÀO SCHEMA:
-    Điền giá trị vào đúng các trường trong schema JSON bên dưới.
-    - Giữ nguyên tên trường (key), chỉ thay thế giá trị (value)
-    - Nếu tên trường trong tài liệu hơi khác → vẫn map vào trường phù hợp nhất
-    - Nếu không có thông tin → để ""
-
-    QUAN TRỌNG - TRÍCH XUẤT TRUNG THỰC:
-    - LUÔN lấy giá trị thực tế trong tài liệu, kể cả khi sai định dạng
-    - KHÔNG bỏ trống nếu ô đó có nội dung (dù sai)
-    - Hệ thống khác sẽ kiểm tra đúng/sai, bạn chỉ cần trích xuất trung thực
-
-    Quy tắc kiểu dữ liệu (chỉ áp dụng khi giá trị RÕ RÀNG đúng loại):
-    - Ngày tháng năm đầy đủ → STRING
-    - Số nguyên thuần túy (số lượng, tiền, mã số, SĐT, chi phí, thời gian) → NUMBER (bỏ dấu phân cách)
-    - Tỷ lệ % → NUMBER (chỉ lấy số)
-    - Tên, địa chỉ, mô tả → STRING
-    - Giá trị hỗn hợp → STRING
-    - Chi phí -> NUMBER (bỏ dấu phân cách và chỉ lấy số)
-
-    Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích.
-
-    Schema (giữ nguyên key, chỉ điền value):
-    {schema_template}
-
-    Nội dung hợp đồng:
-    {contract_text}
-
-    JSON trích xuất:
-    """
-
-    # mua_ban_quoc_te — rules chi tiết theo từng pattern field
-    extraction_rules = EXTRACTION_RULES.get(contract_type, "")
-
-    if contract_type == "mua_ban_tieng_anh":
-        return f"""
-    You are a contract analysis expert. Read the contract carefully and fill in the JSON schema.
-
-    {extraction_rules}
-
-    GENERAL RULES:
-    - Keep field names (keys) unchanged, only replace the values
-    - If information is not found → use ""
-    - Fields with type=number: return a number (integer or float), NO quotes
-    - Fields with type=string: return a quoted string
-    - The "Goods and price" field must be a JSON object (not a string)
-    - Return pure JSON only, NO markdown, NO explanation
-
-    Schema (keep keys, fill values only):
-    {schema_template}
-
-    Contract content:
-    {contract_text}
-
-    Extracted JSON:
-    """
-
-    return f"""
-    Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và thực hiện 2 bước:
-
-    BƯỚC 1 - TRÍCH XUẤT TỰ DO:
-    Đọc toàn bộ hợp đồng và liệt kê TẤT CẢ thông tin có trong tài liệu.
-
-    BƯỚC 2 - MAP VÀO SCHEMA:
-    Điền giá trị vào đúng các trường trong schema JSON bên dưới.
-    - Giữ nguyên tên trường (key), chỉ thay thế giá trị (value)
-    - Nếu tên trường trong tài liệu hơi khác → vẫn map vào trường phù hợp nhất
-    - Nếu không có thông tin → để ""
-
-    QUAN TRỌNG - TRÍCH XUẤT TRUNG THỰC:
-    - LUÔN lấy giá trị thực tế trong tài liệu, kể cả khi sai định dạng
-    - KHÔNG bỏ trống nếu ô đó có nội dung (dù sai)
-    - Hệ thống khác sẽ kiểm tra đúng/sai, bạn chỉ cần trích xuất trung thực
-
-    {extraction_rules}
-
-    QUY TẮC CHUNG:
-    - Giữ nguyên tên trường (key), chỉ thay thế giá trị (value)
-    - Nếu tên trường trong tài liệu hơi khác → vẫn map vào trường phù hợp nhất
-    - Nếu không có thông tin → để ""
-    - Trường type=number: trả về số (integer hoặc float), KHÔNG có dấu ngoặc kép
-    - Trường type=string: trả về chuỗi có dấu ngoặc kép
-    - Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích
-
-    Schema (giữ nguyên key, chỉ điền value):
-    {schema_template}
-
-    Nội dung hợp đồng:
-    {contract_text}
-
-    JSON trích xuất:
-    """
+Schema:
+{schema_template}"""
 
 
-
+# ── Main extraction ───────────────────────────────────────────────────────────
 
 def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
-    """
-    Single LLM call with full schema — avoids missing fields caused by context split.
-    Retries up to 3 times on JSON parse failure.
-    """
     from time import perf_counter
 
-    schema_template  = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-    extraction_rules = EXTRACTION_RULES
+    schema_template = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
     if contract_type == "mua_ban_don_gian":
         static_text = _build_prompt_static_don_gian(schema_template)
     elif contract_type == "mua_ban_tieng_anh":
         static_text = _build_prompt_static_tieng_anh(schema_template)
     else:
-        static_text = _build_prompt_static_quoc_te(schema_template, extraction_rules)
+        static_text = _build_prompt_static_quoc_te(schema_template)
 
     dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
 
@@ -462,15 +348,9 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
 
-# Full pipeline
+# ── Full pipeline ─────────────────────────────────────────────────────────────
 
 def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
-    """
-    Upload → Parse → LLM classify → Load ContractSchema (DynamoDB)
-    → Generate dynamic prompt → LLM extract → Validate → Return results
-
-    Returns: (validation_results, extracted_data, raw_text, contract_type)
-    """
     from time import perf_counter
 
     def _step(label: str, t0: float) -> float:
@@ -488,9 +368,9 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"\n{'='*50}")
 
     print(f"[1] Parse: {filename}")
-    t0 = perf_counter()
+    t0            = perf_counter()
     contract_text = read_docx(docx_path)
-    t0 = _step(f"[2] LLM classify contract_type...", t0)
+    t0            = _step(f"[2] LLM classify contract_type...", t0)
 
     if not contract_type:
         contract_type = detect_contract_type(contract_text)
@@ -508,10 +388,10 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     t0 = _step(f"[5] Validate against DynamoDB schema...", t0)
 
     results = validate_contract(extracted, contract_type, validation_path)
-    t0 = _step(f"[6] Done", t0)
+    t0      = _step(f"[6] Done", t0)
 
     errors = sum(1 for r in results if not r["corrected"])
-    total = perf_counter() - total_t0
+    total  = perf_counter() - total_t0
     print(f"    → {len(results)} fields, {errors} errors")
     print(f"    Total: {total:.2f}s")
     print(f"{'='*50}")
