@@ -60,6 +60,41 @@ def read_docx(file_path: str) -> str:
 
 
 def detect_contract_type(contract_text: str) -> str:
+    """
+    Rule-based classification — fast, no LLM call needed for 3 known types.
+    Falls back to LLM only if rules are inconclusive.
+    """
+    sample = contract_text[:3000].lower()
+
+    # mua_ban_tieng_anh: pure English — no Vietnamese characters
+    vietnamese_chars = "àáâãèéêìíòóôõùúýăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ"
+    viet_count = sum(1 for c in sample if c in vietnamese_chars)
+    if viet_count < 20 and ("seller" in sample or "customer" in sample or "buyer" in sample):
+        print("  → Loại hợp đồng: mua_ban_tieng_anh (rule-based)")
+        return "mua_ban_tieng_anh"
+
+    # mua_ban_quoc_te: Vietnamese + international trade keywords
+    intl_keywords = ["incoterms", "cif", "fob", "exw", "l/c", "port of", "cảng xếp", "cảng đích",
+                     "letter of credit", "usd", "eur", "seller", "buyer"]
+    intl_hits = sum(1 for kw in intl_keywords if kw in sample)
+    if intl_hits >= 2:
+        print("  → Loại hợp đồng: mua_ban_quoc_te (rule-based)")
+        return "mua_ban_quoc_te"
+
+    # mua_ban_don_gian: domestic Vietnamese contract
+    domestic_keywords = ["bên a", "bên b", "bên bán", "bên mua", "hợp đồng mua bán", "vnđ", "đồng"]
+    domestic_hits = sum(1 for kw in domestic_keywords if kw in sample)
+    if domestic_hits >= 2:
+        print("  → Loại hợp đồng: mua_ban_don_gian (rule-based)")
+        return "mua_ban_don_gian"
+
+    # Fallback to LLM if rules inconclusive
+    print("  → Rule-based inconclusive, falling back to LLM...")
+    return _detect_contract_type_llm(contract_text)
+
+
+def _detect_contract_type_llm(contract_text: str) -> str:
+    """LLM fallback for contract type classification."""
     type_list = "\n".join(
         f'- "{k}": {desc}'
         for k, desc in CONTRACT_TYPE_DESCRIPTIONS.items()
@@ -70,11 +105,6 @@ def detect_contract_type(contract_text: str) -> str:
 
     Các loại hợp đồng:
     {type_list}
-
-    Quy trình:
-    1. Tìm các từ khóa đặc trưng trong văn bản (Bên A/B, Seller/Buyer, Incoterms, đơn vị tiền tệ...)
-    2. Đối chiếu với mô tả từng loại
-    3. Chọn loại phù hợp nhất
 
     Chỉ trả về đúng key (ví dụ: mua_ban_don_gian), không giải thích, không markdown, không dấu ngoặc kép.
 
@@ -292,6 +322,7 @@ Schema:
 
 def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
     from time import perf_counter
+    from concurrent.futures import ThreadPoolExecutor
 
     schema_template = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
@@ -302,23 +333,64 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     else:
         static_text = _build_prompt_static_quoc_te(schema_template)
 
-    dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+    # For large schemas, split into 2 parallel calls
+    schema_items = list(schema.items())
+    if len(schema_items) > 30 and contract_type not in ("mua_ban_don_gian", "mua_ban_tieng_anh"):
+        mid = len(schema_items) // 2
+        schema_a = dict(schema_items[:mid])
+        schema_b = dict(schema_items[mid:])
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"text": static_text},
+        def _extract_chunk(chunk_schema: dict) -> dict:
+            chunk_template = json.dumps(chunk_schema, ensure_ascii=False, separators=(",", ":"))
+            static = _build_prompt_static_quoc_te(chunk_template)
+            dynamic = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+            msgs = [{"role": "user", "content": [
+                {"text": static},
                 {"cachePoint": {"type": "default"}},
-                {"text": dynamic_text},
-            ],
-        }
-    ]
+                {"text": dynamic},
+            ]}]
+            for attempt in range(1, 4):
+                t0 = perf_counter()
+                stream_resp = client.converse_stream(modelId=MODEL_ID, messages=msgs)
+                chunks = []
+                for event in stream_resp["stream"]:
+                    if "contentBlockDelta" in event:
+                        delta = event["contentBlockDelta"]["delta"]
+                        if "text" in delta:
+                            chunks.append(delta["text"])
+                raw = "".join(chunks).strip()
+                print(f"    [4] chunk {len(chunk_schema)} fields: {perf_counter()-t0:.2f}s")
+                try:
+                    return _parse_json_from_response(raw)
+                except (ValueError, json.JSONDecodeError) as e:
+                    print(f"  [WARN] chunk attempt {attempt}/3 — {e}")
+                    if attempt < 3:
+                        msgs.append({"role": "assistant", "content": [{"text": raw}]})
+                        msgs.append({"role": "user", "content": [{"text": f"JSON lỗi: {e}. Trả lại JSON hợp lệ, không markdown."}]})
+            raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
+
+        t_start = perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_a = executor.submit(_extract_chunk, schema_a)
+            future_b = executor.submit(_extract_chunk, schema_b)
+            result_a = future_a.result()
+            result_b = future_b.result()
+
+        result = {**result_a, **result_b}
+        print(f"    [4] parallel extract done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
+        return result
+
+    # Single call for small schemas
+    dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+    messages = [{"role": "user", "content": [
+        {"text": static_text},
+        {"cachePoint": {"type": "default"}},
+        {"text": dynamic_text},
+    ]}]
 
     for attempt in range(1, 4):
         t_call = perf_counter()
         stream_resp = client.converse_stream(modelId=MODEL_ID, messages=messages)
-
         raw_chunks  = []
         first_token = None
         for event in stream_resp["stream"]:
@@ -370,12 +442,12 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"[1] Parse: {filename}")
     t0            = perf_counter()
     contract_text = read_docx(docx_path)
-    t0            = _step(f"[2] LLM classify contract_type...", t0)
+    t0            = _step(f"[2] Classify contract_type...", t0)
 
     if not contract_type:
         contract_type = detect_contract_type(contract_text)
-    t0 = _step(f"[3] Load ContractSchema từ DynamoDB (contract_type={contract_type})...", t0)
 
+    t0     = _step(f"[3] Load schema + [4] LLM extract...", t0)
     schema = get_extraction_schema(contract_type)
     print(f"    → {len(schema)} fields loaded")
     t0 = _step(f"[4] Generate dynamic prompt + LLM extract...", t0)
