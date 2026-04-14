@@ -216,7 +216,7 @@
         "required": true
     },
     "Điều 11 - Phụ lục Chấm dứt hợp đồng": {
-        "type": "number",
+        "type": "string",
         "required": true
     },
     "Điều 11 - Thời gian kéo dài": {

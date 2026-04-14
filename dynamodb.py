@@ -6,18 +6,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-AWS_PROFILE       = os.getenv("AWS_PROFILE")
-AWS_REGION        = os.getenv("AWS_REGION")
-SCHEMA_TABLE_NAME = "PanasonicContractSchema"
+# AWS_PROFILE       = os.getenv("AWS_PROFILE")
+# AWS_REGION        = os.getenv("AWS_REGION")
+SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
-session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-dynamodb_client   = session.client("dynamodb")
-dynamodb_resource = session.resource("dynamodb")
+# session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+dynamodb_client   = boto3.client("dynamodb", region_name='ap-southeast-2')
+dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 
 
 CONTRACT_REGISTRY = {
     "mua_ban_don_gian":  "schemas/mua-ban-don-gian.json",
     "mua_ban_quoc_te":   "schemas/mua-ban-quoc-te.json",
+    "mua_ban_tieng_anh":   "schemas/mua-ban-tieng-anh.json",
 }
 
 
@@ -71,13 +72,16 @@ def seed_schema_table(schema: dict, contract_type: str):
 
     with table.batch_writer() as batch:
         for order, (field_name, meta) in enumerate(schema.items()):
-            batch.put_item(Item={
+            item = {
                 "contract_type": contract_type,
                 "field_name":    field_name,
                 "field_order":   Decimal(order),
                 "type":          meta.get("type", "string"),
                 "required":      meta.get("required", False),
-            })
+            }
+            if meta.get("line_hint"):
+                item["line_hint"] = meta["line_hint"]
+            batch.put_item(Item=item)
 
     print(f"  → Seeded {len(schema)} fields for '{contract_type}'.")
 

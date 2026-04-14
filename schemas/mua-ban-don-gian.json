@@ -52,7 +52,7 @@
     },
     "Bên A - CMND/Thẻ CCCD số": {
         "type": "number",
-        " required": true
+        "required": true
     },
     "Bên A - Nơi cấp": {
         "type": "string",
@@ -137,7 +137,8 @@
         "required": true
     },
     "Bên B - Chức vụ người tạo giấy ủy quyền": {
-        "type": "string"
+        "type": "string",
+        "required": true
     },
     "Điều 1 - Số thứ tự": {
         "type": "number",
