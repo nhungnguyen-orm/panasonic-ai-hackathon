@@ -7,6 +7,10 @@ from docx.text.paragraph import Paragraph
 from dotenv import load_dotenv
 from dynamodb import get_extraction_schema, CONTRACT_REGISTRY
 from validator import validate_contract
+from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
+from validator import fetch_schema_from_dynamodb, validate
+
 
 load_dotenv()
 
@@ -154,8 +158,7 @@ def _parse_json_from_response(raw_text: str) -> dict:
         raise ValueError(f"Cannot repair JSON: {candidate[:200]}")
 
 
-# ── Extraction rules for mua_ban_quoc_te ─────────────────────────────────────
-
+# Extraction rules for mua_ban_quoc_te
 EXTRACTION_RULES_QUOC_TE = """
 QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 
@@ -215,8 +218,7 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 """
 
 
-# ── Static prompt builders ────────────────────────────────────────────────────
-
+# Static prompt builders
 def _build_prompt_static_don_gian(schema_template: str) -> str:
     return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và điền vào schema JSON.
 
@@ -328,12 +330,9 @@ Schema:
 {schema_template}"""
 
 
-# ── Main extraction ───────────────────────────────────────────────────────────
+# Main extraction
 
 def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
-    from time import perf_counter
-    from concurrent.futures import ThreadPoolExecutor
-
     schema_template = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
     if contract_type == "mua_ban_don_gian":
@@ -436,11 +435,8 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
 
-# ── Full pipeline ─────────────────────────────────────────────────────────────
-
+# Full pipeline
 def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
-    from time import perf_counter
-
     def _step(label: str, t0: float) -> float:
         t1 = perf_counter()
         print(f"{t1 - t0:.2f}s")
@@ -463,20 +459,31 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     if not contract_type:
         contract_type = detect_contract_type(contract_text)
 
-    t0     = _step(f"[3] Load schema + [4] LLM extract...", t0)
-    schema = get_extraction_schema(contract_type)
-    print(f"    → {len(schema)} fields loaded")
-    t0 = _step(f"[4] Generate dynamic prompt + LLM extract...", t0)
+    # [3] Fetch extraction schema + validation schema từ DynamoDB song song
+    t0 = _step(f"[3] Load extraction schema ∥ validation schema (parallel DynamoDB)...", t0)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_extraction = executor.submit(get_extraction_schema, contract_type)
+        future_validation = executor.submit(fetch_schema_from_dynamodb, contract_type)
+        schema        = future_extraction.result()
+        schema_fields = future_validation.result()
+    print(f"    → extraction: {len(schema)} fields | validation: {len(schema_fields)} fields")
 
+    t0 = _step(f"[4] LLM extract...", t0)
     extracted = extract_contract_info(contract_text, schema, contract_type)
 
     with open(extracted_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, ensure_ascii=False, indent=2)
     print(f"    → Saved: {extracted_path}")
-    t0 = _step(f"[5] Validate against DynamoDB schema...", t0)
+    t0 = _step(f"[5] Validate...", t0)
 
-    results = validate_contract(extracted, contract_type, validation_path)
-    t0      = _step(f"[6] Done", t0)
+    # use schema_fields already fetch
+    results = validate(extracted, schema_fields)
+    with open(validation_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2, default=str)
+    corrected = sum(1 for r in results if r["corrected"])
+    print(f"  → Validation [{contract_type}]: {corrected}/{len(results)} fields correct → {validation_path}")
+
+    t0 = _step(f"[6] Done", t0)
 
     errors = sum(1 for r in results if not r["corrected"])
     total  = perf_counter() - total_t0
@@ -485,11 +492,3 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"{'='*50}")
 
     return results, extracted, contract_text, contract_type
-
-
-if __name__ == "__main__":
-    FILES_DIR = "files/hop-dong-mua-ban-don-gian"
-
-    for filename in os.listdir(FILES_DIR):
-        if filename.endswith(".docx"):
-            process_contract(os.path.join(FILES_DIR, filename))
