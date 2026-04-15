@@ -75,7 +75,8 @@
         "required": true
     },
     "Bên A - Chức vụ người tạo giấy ủy quyền": {
-        "type": "string"
+        "type": "string",
+        "required": true
     },
     "Bên B - Tên doanh nghiệp": {
         "type": "string",
@@ -140,32 +141,39 @@
         "type": "string",
         "required": true
     },
-    "Điều 1 - Số thứ tự": {
-        "type": "number",
-        "required": true
-    },
-    "Điều 1 - Tên hàng hóa": {
-        "type": "string",
-        "required": true
-    },
-    "Điều 1 - Đơn vị": {
-        "type": "string",
-        "required": true
-    },
-    "Điều 1 - Số lượng": {
-        "type": "number",
-        "required": true
-    },
-    "Điều 1 - Đơn giá": {
-        "type": "number",
-        "required": true
-    },
-    "Điều 1 - Thành tiền": {
-        "type": "number",
-        "required": true
-    },
-    "Điều 1 - Ghi chú": {
-        "type": "string"
+    "Điều 1 - Hàng hóa": {
+        "type": "object",
+        "required": true,
+        "item_schema": {
+            "stt": {
+                "type": "number"
+            },
+            "description": {
+                "type": "string",
+                "required": true
+            },
+            "unit": {
+                "type": "string"
+            },
+            "quantity": {
+                "type": "number",
+                "required": true,
+                "min": 1
+            },
+            "unit_price": {
+                "type": "number",
+                "required": true,
+                "min": 0
+            },
+            "total_price": {
+                "type": "number",
+                "required": true,
+                "min": 0
+            },
+            "note": {
+                "type": "string"
+            }
+        }
     },
     "Điều 1 - Số tiền bằng chữ": {
         "type": "string",

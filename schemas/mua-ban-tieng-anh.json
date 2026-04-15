@@ -21,38 +21,27 @@
     },
     "Goods and price": {
         "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "description": {
-                            "type": "string"
-                        },
-                        "quantity": {
-                            "type": "interger",
-                            "minimum": 1
-                        },
-                        "price_per_unit": {
-                            "type": "number"
-                        },
-                        "total_price": {
-                            "type": "number"
-                        }
-                    },
-                    "required": [
-                        "description",
-                        "quantity",
-                        "price_per_unit",
-                        "total_price"
-                    ]
-                }
+        "required": true,
+        "item_schema": {
+            "description": {
+                "type": "string",
+                "required": true
             },
-            "required": [
-                "items",
-                "grand_total_amount_written"
-            ]
+            "quantity": {
+                "type": "number",
+                "required": true,
+                "min": 1
+            },
+            "price_per_unit": {
+                "type": "number",
+                "required": true,
+                "min": 0
+            },
+            "total_price": {
+                "type": "number",
+                "required": true,
+                "min": 0
+            }
         }
     },
     "Total Amount": {
