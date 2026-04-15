@@ -17,13 +17,13 @@ dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 
 CONTRACT_REGISTRY = {
     "mua_ban_don_gian":  "schemas/mua-ban-don-gian.json",
-    "mua_ban_quoc_te":   "schemas/mua-ban-quoc-te.json",
+    # "mua_ban_quoc_te":   "schemas/mua-ban-quoc-te.json",
     "mua_ban_tieng_anh":   "schemas/mua-ban-tieng-anh.json",
 }
 
 CONTRACT_LABELS = {
     "mua_ban_don_gian":  "Mua bán đơn giản",
-    "mua_ban_quoc_te":   "Mua bán quốc tế",
+    # "mua_ban_quoc_te":   "Mua bán quốc tế",
     "mua_ban_tieng_anh": "Mua bán tiếng Anh",
 }
 
