@@ -41,6 +41,26 @@ def is_number(value) -> bool:
         return bool(_NUMERIC_RE.match(value.strip()))
     return False
 
+def extract_number(value) -> float | None:
+    """
+    Try to extract a leading number from a string like '500.000 đồng/ngày' → 500000.0
+    Returns None if no number can be extracted.
+    """
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    # Remove thousand separators (dots before 3 digits) then grab leading number
+    cleaned = re.sub(r"\.(?=\d{3}(?:[^\d]|$))", "", value.strip())
+    cleaned = cleaned.replace(",", ".")
+    m = re.match(r"^-?\d+(?:\.\d+)?", cleaned)
+    if m:
+        try:
+            return float(m.group())
+        except ValueError:
+            return None
+    return None
+
 TYPE_CHECKERS = {
     "number": is_number,
     "string": lambda v: isinstance(v, str),
@@ -51,39 +71,72 @@ TYPE_CHECKERS = {
 
 # ── Object item validation ────────────────────────────────────────────────────
 
-def _validate_object_items(field_name: str, value: dict) -> list[dict]:
+def _validate_object_items(field_name: str, value: dict, item_schema: dict | None = None) -> list[dict]:
     """
-    Validate each item inside value["items"].
-    Returns one result entry per item with corrected=True/False.
+    Validate each item inside value["items"] using item_schema from DynamoDB.
+    item_schema: {sub_field: {type, required, min}} — loaded from DynamoDB attribute.
+    Falls back to hardcoded defaults if item_schema is None.
     """
     results = []
     items   = value.get("items", [])
     if not isinstance(items, list):
         return results
 
+    # Default fallback schema if not provided
+    if not item_schema:
+        item_schema = {
+            "description":    {"type": "string", "required": True},
+            "quantity":       {"type": "number", "required": True, "min": 1},
+            "price_per_unit": {"type": "number", "required": True, "min": 0},
+            "total_price":    {"type": "number", "required": True, "min": 0},
+        }
+
     for i, item in enumerate(items):
         if not isinstance(item, dict):
             continue
+
         desc   = item.get("description", f"item[{i}]")
-        qty    = item.get("quantity")
         errors = []
 
-        if qty is None:
-            errors.append("quantity missing")
-        elif not isinstance(qty, (int, float)):
-            errors.append(f"quantity wrong type - expected number, got '{qty}'")
-        else:
-            try:
-                if float(qty) < 1:
-                    errors.append("quantity must be greater than 0")
-            except (TypeError, ValueError):
-                errors.append(f"quantity wrong type - expected number, got '{qty}'")
+        for sub_field, sub_def in item_schema.items():
+            sub_type     = sub_def.get("type", "string")
+            sub_required = sub_def.get("required", False)
+            sub_min      = sub_def.get("min")
+            val          = item.get(sub_field)
+
+            if val is None or val == "":
+                if sub_required:
+                    errors.append(f"{sub_field} missing")
+                continue
+
+            checker = TYPE_CHECKERS.get(sub_type)
+            if checker and not checker(val):
+                errors.append(f"{sub_field} wrong type - expected {sub_type}, got '{val}'")
+                continue
+
+            if sub_min is not None and isinstance(val, (int, float)):
+                if float(val) < sub_min:
+                    errors.append(f"{sub_field} must be >= {sub_min}, got {val}")
+
+        # Cross-check total_price = quantity × unit_price (support both key names)
+        qty      = item.get("quantity")
+        ppu      = item.get("unit_price") or item.get("price_per_unit")
+        tp       = item.get("total_price")
+        if all(isinstance(v, (int, float)) for v in [qty, ppu, tp] if v is not None):
+            if qty and ppu is not None and tp is not None:
+                expected = round(float(qty) * float(ppu), 2)
+                actual   = round(float(tp), 2)
+                if abs(expected - actual) > 0.01:
+                    errors.append(
+                        f"total_price mismatch: {qty} × {ppu} = {expected}, but got {actual}"
+                    )
 
         results.append({
             "field":     f"{field_name} - {desc}",
             "value":     item,
             "corrected": len(errors) == 0,
             "reason":    "; ".join(errors) if errors else None,
+            "line_hint": "",
         })
 
     return results
@@ -112,13 +165,33 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
 
         checker = TYPE_CHECKERS.get(field_type)
         if checker and not checker(value):
-            results.append({
-                "field":     field_name,
-                "value":     value,
-                "corrected": False,
-                "reason":    f"wrong type - expected {field_type}",
-                "line_hint": field_def.get("line_hint", ""),
-            })
+            # For number fields: try to extract a leading number from strings like "12 tháng", "500.000 đồng/ngày"
+            if field_type == "number" and isinstance(value, str):
+                parsed = extract_number(value)
+                if parsed is not None:
+                    results.append({
+                        "field":     field_name,
+                        "value":     value,
+                        "corrected": False,
+                        "reason":    f"expected number",
+                        "line_hint": field_def.get("line_hint", ""),
+                    })
+                else:
+                    results.append({
+                        "field":     field_name,
+                        "value":     value,
+                        "corrected": False,
+                        "reason":    f"wrong type - expected number, got '{value}'",
+                        "line_hint": field_def.get("line_hint", ""),
+                    })
+            else:
+                results.append({
+                    "field":     field_name,
+                    "value":     value,
+                    "corrected": False,
+                    "reason":    f"wrong type - expected {field_type}",
+                    "line_hint": field_def.get("line_hint", ""),
+                })
         elif field_type == "object" and isinstance(value, dict):
             results.append({
                 "field":     field_name,
@@ -127,7 +200,10 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
                 "reason":    None,
                 "line_hint": "",
             })
-            results.extend(_validate_object_items(field_name, value))
+            # Load item_schema from DynamoDB field def (stored as JSON string)
+            raw_item_schema = field_def.get("item_schema")
+            item_schema = json.loads(raw_item_schema) if isinstance(raw_item_schema, str) else raw_item_schema
+            results.extend(_validate_object_items(field_name, value, item_schema))
         else:
             results.append({
                 "field":     field_name,

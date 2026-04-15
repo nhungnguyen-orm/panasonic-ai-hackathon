@@ -117,6 +117,7 @@ def _detect_contract_type_llm(contract_text: str) -> str:
     response = client.converse(
         modelId=MODEL_ID_EXTRACT,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"temperature": 0, "maxTokens": 64},
     )
     detected = response["output"]["message"]["content"][0]["text"].strip().strip('"').strip()
 
@@ -217,26 +218,35 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 # ── Static prompt builders ────────────────────────────────────────────────────
 
 def _build_prompt_static_don_gian(schema_template: str) -> str:
-    return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và thực hiện 2 bước:
+    return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và điền vào schema JSON.
 
-BƯỚC 1 - TRÍCH XUẤT TỰ DO:
-Đọc toàn bộ hợp đồng và liệt kê TẤT CẢ thông tin có trong tài liệu.
+QUY TẮC TRÍCH XUẤT:
 
-BƯỚC 2 - MAP VÀO SCHEMA:
-Điền giá trị vào đúng các trường trong schema JSON bên dưới.
-- Giữ nguyên tên trường (key), chỉ thay thế giá trị (value)
-- Nếu tên trường trong tài liệu hơi khác → vẫn map vào trường phù hợp nhất
-- Nếu không có thông tin → để ""
+1. TRƯỜNG SỐ (type=number): chỉ lấy số, bỏ đơn vị, bỏ dấu phân cách hàng nghìn
+   - "25.000.000 đồng" → 25000000
+   - "10 cái" → 10
+   - "0,5%" → 0.5
+   - "500.000 đồng/ngày" → 500000
+   - "12 tháng" → 12
+   - "2 năm" → 2
+   - TUYỆT ĐỐI không trả về string cho trường number, chỉ trả về con số thuần túy
 
-QUAN TRỌNG - TRÍCH XUẤT TRUNG THỰC:
-- LUÔN lấy giá trị thực tế trong tài liệu, kể cả khi sai định dạng
-- KHÔNG bỏ trống nếu ô đó có nội dung (dù sai)
+2. TRƯỜNG NGÀY THÁNG NĂM (type=string): giữ nguyên định dạng đầy đủ
 
-Quy tắc kiểu dữ liệu:
-- Ngày tháng năm đầy đủ → STRING
-- Số nguyên thuần túy (số lượng, tiền, mã số, SĐT, chi phí, thời gian) → NUMBER (bỏ dấu phân cách)
-- Tỷ lệ % → NUMBER (chỉ lấy số)
-- Tên, địa chỉ, mô tả → STRING
+3. TRƯỜNG TÊN, ĐỊA CHỈ, MÔ TẢ (type=string): lấy nguyên văn
+
+4. TRƯỜNG "Điều 1 - Hàng hóa" (type=object) — QUAN TRỌNG:
+   - Trích xuất TOÀN BỘ các dòng hàng hóa trong bảng thành object với "items" array
+   - Mỗi item gồm: stt (number), description (string), unit (string), quantity (number), unit_price (number), total_price (number), note (string hoặc "")
+   - Bỏ dấu phân cách hàng nghìn trong số
+   - Ví dụ:
+     {{
+       "items": [
+         {{"stt": 1, "description": "Máy tính Dell XPS 13", "unit": "Cái", "quantity": 10, "unit_price": 25000000, "total_price": 250000000, "note": "Mới 100%"}}
+       ]
+     }}
+
+5. TRÍCH XUẤT TRUNG THỰC: lấy giá trị thực tế kể cả khi sai, chỉ để "" khi thực sự không có thông tin
 
 Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích.
 
@@ -351,7 +361,10 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
             ]}]
             for attempt in range(1, 4):
                 t0 = perf_counter()
-                stream_resp = client.converse_stream(modelId=MODEL_ID, messages=msgs)
+                stream_resp = client.converse_stream(
+                    modelId=MODEL_ID, messages=msgs,
+                    inferenceConfig={"temperature": 0},
+                )
                 chunks = []
                 for event in stream_resp["stream"]:
                     if "contentBlockDelta" in event:
@@ -390,7 +403,10 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
 
     for attempt in range(1, 4):
         t_call = perf_counter()
-        stream_resp = client.converse_stream(modelId=MODEL_ID, messages=messages)
+        stream_resp = client.converse_stream(
+            modelId=MODEL_ID, messages=messages,
+            inferenceConfig={"temperature": 0},
+        )
         raw_chunks  = []
         first_token = None
         for event in stream_resp["stream"]:
