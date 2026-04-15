@@ -3,6 +3,7 @@ import json
 import boto3
 import os
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
 
@@ -13,8 +14,7 @@ SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 
 
-# ── Fetch schema ──────────────────────────────────────────────────────────────
-
+# Fetch schema
 def fetch_schema_from_dynamodb(contract_type: str) -> list[dict]:
     table    = dynamodb_resource.Table(SCHEMA_TABLE_NAME)
     response = table.query(KeyConditionExpression=Key("contract_type").eq(contract_type))
@@ -30,8 +30,7 @@ def fetch_schema_from_dynamodb(contract_type: str) -> list[dict]:
     return sorted(items, key=lambda x: int(x["field_order"]))
 
 
-# ── Type checkers ─────────────────────────────────────────────────────────────
-
+# Type checkers 
 _NUMERIC_RE = re.compile(r"^\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?$|^\d+$")
 
 def is_number(value) -> bool:
@@ -69,8 +68,7 @@ TYPE_CHECKERS = {
 }
 
 
-# ── Object item validation ────────────────────────────────────────────────────
-
+# Object item validation
 def _validate_object_items(field_name: str, value: dict, item_schema: dict | None = None) -> list[dict]:
     """
     Validate each item inside value["items"] using item_schema from DynamoDB.
@@ -142,81 +140,69 @@ def _validate_object_items(field_name: str, value: dict, item_schema: dict | Non
     return results
 
 
-# ── Core validation ───────────────────────────────────────────────────────────
+# Core validation 
+def _validate_single_field(field_def: dict, extracted: dict) -> list[dict]:
+    """Validate một field đơn lẻ, trả về list kết quả (object field có thể trả nhiều)."""
+    field_name = field_def["field_name"]
+    field_type = field_def.get("type", "string")
+    required   = bool(field_def.get("required", False))
+    value      = extracted.get(field_name)
 
-def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
-    results = []
+    if value is None or value == "":
+        return [{
+            "field":     field_name,
+            "value":     value,
+            "corrected": False,
+            "reason":    "missing required field" if required else "missing field",
+            "line_hint": field_def.get("line_hint", ""),
+        }]
 
-    for field_def in schema_fields:
-        field_name = field_def["field_name"]
-        field_type = field_def.get("type", "string")
-        required   = bool(field_def.get("required", False))
-        value      = extracted.get(field_name)
-
-        if value is None or value == "":
-            results.append({
+    checker = TYPE_CHECKERS.get(field_type)
+    if checker and not checker(value):
+        if field_type == "number" and isinstance(value, str):
+            parsed = extract_number(value)
+            reason = "expected number" if parsed is not None else f"wrong type - expected number, got '{value}'"
+            return [{
                 "field":     field_name,
                 "value":     value,
                 "corrected": False,
-                "reason":    "missing required field" if required else "missing field",
+                "reason":    reason,
                 "line_hint": field_def.get("line_hint", ""),
-            })
-            continue
+            }]
+        return [{
+            "field":     field_name,
+            "value":     value,
+            "corrected": False,
+            "reason":    f"wrong type - expected {field_type}",
+            "line_hint": field_def.get("line_hint", ""),
+        }]
 
-        checker = TYPE_CHECKERS.get(field_type)
-        if checker and not checker(value):
-            # For number fields: try to extract a leading number from strings like "12 tháng", "500.000 đồng/ngày"
-            if field_type == "number" and isinstance(value, str):
-                parsed = extract_number(value)
-                if parsed is not None:
-                    results.append({
-                        "field":     field_name,
-                        "value":     value,
-                        "corrected": False,
-                        "reason":    f"expected number",
-                        "line_hint": field_def.get("line_hint", ""),
-                    })
-                else:
-                    results.append({
-                        "field":     field_name,
-                        "value":     value,
-                        "corrected": False,
-                        "reason":    f"wrong type - expected number, got '{value}'",
-                        "line_hint": field_def.get("line_hint", ""),
-                    })
-            else:
-                results.append({
-                    "field":     field_name,
-                    "value":     value,
-                    "corrected": False,
-                    "reason":    f"wrong type - expected {field_type}",
-                    "line_hint": field_def.get("line_hint", ""),
-                })
-        elif field_type == "object" and isinstance(value, dict):
-            results.append({
-                "field":     field_name,
-                "value":     value,
-                "corrected": True,
-                "reason":    None,
-                "line_hint": "",
-            })
-            # Load item_schema from DynamoDB field def (stored as JSON string)
-            raw_item_schema = field_def.get("item_schema")
-            item_schema = json.loads(raw_item_schema) if isinstance(raw_item_schema, str) else raw_item_schema
-            results.extend(_validate_object_items(field_name, value, item_schema))
-        else:
-            results.append({
-                "field":     field_name,
-                "value":     value,
-                "corrected": True,
-                "reason":    None,
-                "line_hint": "",
-            })
+    if field_type == "object" and isinstance(value, dict):
+        raw_item_schema = field_def.get("item_schema")
+        item_schema = json.loads(raw_item_schema) if isinstance(raw_item_schema, str) else raw_item_schema
+        return [
+            {"field": field_name, "value": value, "corrected": True, "reason": None, "line_hint": ""},
+            *_validate_object_items(field_name, value, item_schema),
+        ]
 
-    return results
+    return [{"field": field_name, "value": value, "corrected": True, "reason": None, "line_hint": ""}]
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
+    with ThreadPoolExecutor(max_workers=min(16, len(schema_fields))) as executor:
+        futures = {
+            executor.submit(_validate_single_field, field_def, extracted): i
+            for i, field_def in enumerate(schema_fields)
+        }
+        ordered: list[list[dict]] = [None] * len(schema_fields)
+        for future in as_completed(futures):
+            idx = futures[future]
+            ordered[idx] = future.result()
+
+    return [item for sublist in ordered for item in sublist]
+
+
+# Entry point
 
 def validate_contract(extracted: dict, contract_type: str, output_path: str) -> list[dict]:
     schema_fields = fetch_schema_from_dynamodb(contract_type)
