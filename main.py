@@ -247,6 +247,13 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
    - Ví dụ: "Giá cả: bộ" → "bộ"
    - Ví dụ: "theo quy định tại điều trong hợp đồng này" → "điều"
    - CHỈ để "" khi thực sự không có thông tin nào liên quan
+
+10. XỬ LÝ DẠNG "Label: Value" TRÊN CÙNG MỘT DÒNG (thường gặp trong PDF):
+   - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
+     "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
+   - Nếu phần sau dấu ":" là tên/nội dung thuộc về một field KHÁC trong schema, thì field hiện tại bị THIẾU (để "")
+     Ví dụ: "Mã số doanh nghiệp: Công ty TNHH ABC" → "Mã số doanh nghiệp" = "" (thiếu)
+   - KHÔNG bao giờ nhét tên công ty / địa chỉ / tên người vào trường type=number
 """
 
 
@@ -293,6 +300,15 @@ QUY TẮC TRÍCH XUẤT:
      }}
 
 5. TRÍCH XUẤT TRUNG THỰC: lấy giá trị thực tế kể cả khi sai, chỉ để "" khi thực sự không có thông tin
+
+6. XỬ LÝ DẠNG "Label: Value" TRÊN CÙNG MỘT DÒNG (thường gặp trong PDF):
+   - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
+     "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
+     "Tài khoản số: 1900NAN"           → field "Tài khoản số" = "1900NAN"
+   - Nếu phần sau dấu ":" là tên của một field KHÁC trong schema, thì field hiện tại bị THIẾU (để "")
+     Ví dụ: "Mã số doanh nghiệp: Công ty TNHH ABC" — "Công ty TNHH ABC" là giá trị của "Tên doanh nghiệp",
+     KHÔNG phải mã số → "Mã số doanh nghiệp" = "" (thiếu)
+   - KHÔNG bao giờ nhét tên công ty / địa chỉ / tên người vào trường type=number
 
 {_LINE_NUMBER_RULE}
 
@@ -373,6 +389,12 @@ GENERAL RULES:
 - Fields with type=string: return a quoted string
 - The "Goods and price" field must be a JSON object (not a string)
 - Return pure JSON only, NO markdown, NO explanation
+
+PDF "Label: Value" RULE:
+- PDFs often merge label and value on the same line, e.g. "Account No: 1900NAN"
+- Extract only the part AFTER the colon as the value
+- If the part after the colon is clearly the value of a DIFFERENT field in the schema, the current field is missing → use ""
+- NEVER put a company name, person name, or address into a type=number field
 
 LINE NUMBER RULE — IMPORTANT:
 - Contract lines are numbered as [L1], [L2], [L3]...

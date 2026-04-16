@@ -692,7 +692,30 @@ elif st.session_state["page"] == "prompt":
                     '</div>',
                     unsafe_allow_html=True,
                 )
-                for r in p_errors:
+
+                P_PAGE_SIZE   = 4
+                p_total_pages = (len(p_errors) + P_PAGE_SIZE - 1) // P_PAGE_SIZE
+
+                if p_total_pages > 1:
+                    p_cols = st.columns(p_total_pages + 2)
+                    if p_cols[0].button("‹", key="p_prev_page"):
+                        st.session_state["p_error_page"] = max(1, st.session_state.get("p_error_page", 1) - 1)
+                        st.rerun()
+                    for i in range(1, p_total_pages + 1):
+                        if p_cols[i].button(str(i), key=f"p_page_{i}",
+                                            type="primary" if i == st.session_state.get("p_error_page", 1) else "secondary"):
+                            st.session_state["p_error_page"] = i
+                            st.rerun()
+                    if p_cols[p_total_pages + 1].button("›", key="p_next_page"):
+                        st.session_state["p_error_page"] = min(p_total_pages, st.session_state.get("p_error_page", 1) + 1)
+                        st.rerun()
+                    st.caption(f"Page {st.session_state.get('p_error_page', 1)}/{p_total_pages} · {len(p_errors)} errors")
+                else:
+                    st.caption(f"{len(p_errors)} error(s)")
+
+                p_page  = st.session_state.get("p_error_page", 1)
+                p_start = (p_page - 1) * P_PAGE_SIZE
+                for r in p_errors[p_start: p_start + P_PAGE_SIZE]:
                     src         = r.get("_source", "Schema")
                     badge_color = "#0057a8" if src == "Schema" else "#722ed1"
                     val         = r["value"]
@@ -760,7 +783,8 @@ elif st.session_state["page"] == "prompt":
                 "_source":   "Prompt",
             })
 
-        st.session_state["p_results"]  = merged
-        st.session_state["p_lines"]    = lines
-        st.session_state["p_filename"] = p_uploaded.name
+        st.session_state["p_results"]    = merged
+        st.session_state["p_lines"]      = lines
+        st.session_state["p_filename"]   = p_uploaded.name
+        st.session_state["p_error_page"] = 1
         st.rerun()
