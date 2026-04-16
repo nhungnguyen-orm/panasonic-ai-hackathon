@@ -281,18 +281,7 @@ QUY TẮC TRÍCH XUẤT:
    - "500.000 đồng/ngày" → 500000
    - "12 tháng" → 12
    - "2 năm" → 2
-   - "8%" → 8
-   - "04" → 4
-   - "02" → 2
    - TUYỆT ĐỐI không trả về string cho trường number, chỉ trả về con số thuần túy
-   - TUYỆT ĐỐI không có đơn vị (đồng, tháng, năm, %, VNĐ, USD...) trong giá trị number
-   - TRƯỜNG "...số" (Giấy ủy quyền số, Số hợp đồng...): chỉ lấy con số ngay sau từ "số", bỏ phần ngày tháng và tên người phía sau
-     Ví dụ: "Giấy ủy quyền số: 1 ngày 06 tháng 04 năm 2026 do Nguyễn Văn An ký" → 1
-     Ví dụ: "số: 15 ngày..." → 15
-   - TRƯỜNG "Năm hợp đồng": extract năm (4 chữ số) từ số hợp đồng
-     Ví dụ: "Số: 01/2026/HĐMB" → Năm hợp đồng = 2026
-     Ví dụ: "Số: 15-2025-HD" → Năm hợp đồng = 2025
-     Ví dụ: "Số hợp đồng: ABC/2024/XYZ" → Năm hợp đồng = 2024
 
 2. TRƯỜNG NGÀY THÁNG NĂM (type=string): giữ nguyên định dạng đầy đủ
 
@@ -308,6 +297,11 @@ QUY TẮC TRÍCH XUẤT:
          {{"stt": 1, "description": "Máy tính Dell XPS 13", "unit": "Cái", "quantity": 10, "unit_price": 25000000, "total_price": 250000000, "note": "Mới 100%"}}
        ]
      }}
+
+5. TRƯỜNG "Bên A - Giấy ủy quyền số" (type=number): chỉ lấy số, bỏ chữ ở phía sau
+    - "1 ngày 06 tháng 04 năm 2026 do Nguyễn Văn An chức vụ Giám đốc ký" → 1
+    - TUYỆT ĐỐI không trả về string cho trường number, chỉ trả về con số thuần túy
+    -> TRẢ VỀ NUMBER
 
 5. TRÍCH XUẤT TRUNG THỰC: lấy giá trị thực tế kể cả khi sai, chỉ để "" khi thực sự không có thông tin
 
