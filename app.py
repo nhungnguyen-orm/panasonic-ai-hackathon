@@ -67,7 +67,7 @@ with st.sidebar:
     # Footer
     st.markdown(
         f'<div style="padding:20px 16px;border-top:1px solid #21262d;text-align:center; margin-top:20px">'
-        f'<img src="data:image/png;base64,{_renova_b64}" style="width:140px;object-fit:contain;opacity:0.9;">'
+        f'<img src="data:image/png;base64,{_renova_b64}" style="width:200px;object-fit:contain;opacity:0.9;">'
         f'</div>',
         unsafe_allow_html=True,
     )

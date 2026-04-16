@@ -281,7 +281,18 @@ QUY TẮC TRÍCH XUẤT:
    - "500.000 đồng/ngày" → 500000
    - "12 tháng" → 12
    - "2 năm" → 2
+   - "8%" → 8
+   - "04" → 4
+   - "02" → 2
    - TUYỆT ĐỐI không trả về string cho trường number, chỉ trả về con số thuần túy
+   - TUYỆT ĐỐI không có đơn vị (đồng, tháng, năm, %, VNĐ, USD...) trong giá trị number
+   - TRƯỜNG "...số" (Giấy ủy quyền số, Số hợp đồng...): chỉ lấy con số ngay sau từ "số", bỏ phần ngày tháng và tên người phía sau
+     Ví dụ: "Giấy ủy quyền số: 1 ngày 06 tháng 04 năm 2026 do Nguyễn Văn An ký" → 1
+     Ví dụ: "số: 15 ngày..." → 15
+   - TRƯỜNG "Năm hợp đồng": extract năm (4 chữ số) từ số hợp đồng
+     Ví dụ: "Số: 01/2026/HĐMB" → Năm hợp đồng = 2026
+     Ví dụ: "Số: 15-2025-HD" → Năm hợp đồng = 2025
+     Ví dụ: "Số hợp đồng: ABC/2024/XYZ" → Năm hợp đồng = 2024
 
 2. TRƯỜNG NGÀY THÁNG NĂM (type=string): giữ nguyên định dạng đầy đủ
 
@@ -419,16 +430,27 @@ def extract_contract_info(contract_text: str, numbered_text: str, schema: dict, 
     else:
         static_text = _build_prompt_static_quoc_te(schema_template)
 
-    # For large schemas, split into 2 parallel calls
+    # For large schemas, split into parallel calls (3 chunks if >40 fields, 2 chunks if >20)
     schema_items = list(schema.items())
-    if len(schema_items) > 30 and contract_type not in ("mua_ban_don_gian", "mua_ban_tieng_anh"):
-        mid = len(schema_items) // 2
-        schema_a = dict(schema_items[:mid])
-        schema_b = dict(schema_items[mid:])
+    n_items = len(schema_items)
+    n_chunks = 3 if n_items > 40 else (2 if n_items > 20 else 1)
+
+    if n_chunks > 1:
+        chunk_size = (n_items + n_chunks - 1) // n_chunks
+        schema_chunks = [
+            dict(schema_items[i * chunk_size:(i + 1) * chunk_size])
+            for i in range(n_chunks)
+            if schema_items[i * chunk_size:(i + 1) * chunk_size]
+        ]
 
         def _extract_chunk(chunk_schema: dict) -> dict:
             chunk_template = json.dumps(chunk_schema, ensure_ascii=False, separators=(",", ":"))
-            static = _build_prompt_static_quoc_te(chunk_template)
+            if contract_type == "mua_ban_don_gian":
+                static = _build_prompt_static_don_gian(chunk_template)
+            elif contract_type == "mua_ban_tieng_anh":
+                static = _build_prompt_static_tieng_anh(chunk_template)
+            else:
+                static = _build_prompt_static_quoc_te(chunk_template)
             dynamic = f"\nNội dung hợp đồng (có đánh số dòng):\n{numbered_text}\n\nJSON trích xuất:"
             msgs = [{"role": "user", "content": [
                 {"text": static},
@@ -459,14 +481,14 @@ def extract_contract_info(contract_text: str, numbered_text: str, schema: dict, 
             raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
         t_start = perf_counter()
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_a = executor.submit(_extract_chunk, schema_a)
-            future_b = executor.submit(_extract_chunk, schema_b)
-            result_a = future_a.result()
-            result_b = future_b.result()
+        with ThreadPoolExecutor(max_workers=len(schema_chunks)) as executor:
+            futures = [executor.submit(_extract_chunk, chunk) for chunk in schema_chunks]
+            results_list = [f.result() for f in futures]
 
-        result = {**result_a, **result_b}
-        print(f"    [4] parallel extract done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
+        result = {}
+        for r in results_list:
+            result.update(r)
+        print(f"    [4] parallel extract ({len(schema_chunks)} chunks) done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
         extracted, line_map = _split_line_map(result)
         return extracted, line_map
 
@@ -563,32 +585,42 @@ def process_contract(
     print(f"\n{'='*50}")
 
     print(f"[1] Parse: {filename}")
-    t0             = perf_counter()
+    t0 = perf_counter()
     _notify("📄 Parsing document...", "running")
-    lines, contract_text = read_document(docx_path)
-    numbered_text  = _numbered_text(lines)
-    _notify(f"📄 Parsed lines", "done")
-    t0             = _step(f"[2] Classify contract_type...", t0)
 
-    _notify("🔍 Detecting contract type...", "running")
-    if not contract_type:
+    if contract_type:
+        # contract_type known upfront → parse doc + fetch schema in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_parse  = executor.submit(read_document, docx_path)
+            future_schema = executor.submit(fetch_schema_from_dynamodb, contract_type)
+            lines, contract_text = future_parse.result()
+            schema_fields        = future_schema.result()
+        numbered_text = _numbered_text(lines)
+        _notify("📄 Parsed lines", "done")
+        t0 = _step(f"[2] contract_type provided: {contract_type}", t0)
+        _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
+    else:
+        # Need to parse first, then detect type, then fetch schema
+        lines, contract_text = read_document(docx_path)
+        numbered_text = _numbered_text(lines)
+        _notify("📄 Parsed lines", "done")
+        t0 = _step(f"[2] Classify contract_type...", t0)
+
+        _notify("🔍 Detecting contract type...", "running")
         contract_type = detect_contract_type(contract_text)
-    _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
+        _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
 
-    # [3+4] Fetch validation schema ∥ (fetch extraction schema → LLM extract)
-    t0 = _step(f"[3+4] Validation schema ∥ LLM extract (parallel)...", t0)
+        schema_fields = fetch_schema_from_dynamodb(contract_type)
+
+    if not schema_fields:
+        raise ValueError(f"Không tìm thấy schema cho '{contract_type}' trong DynamoDB.")
+
+    # [3+4] LLM extract using already-fetched schema
+    t0 = _step(f"[3+4] LLM extract ({len(schema_fields)} fields)...", t0)
     _notify("🤖 Extracting fields with AI...", "running")
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_validation = executor.submit(fetch_schema_from_dynamodb, contract_type)
-
-        def _do_extract():
-            schema = get_extraction_schema(contract_type)
-            return extract_contract_info(contract_text, numbered_text, schema, contract_type)
-
-        future_extract = executor.submit(_do_extract)
-        schema_fields          = future_validation.result()
-        extracted, line_map    = future_extract.result()
+    extraction_schema = {f["field_name"]: "" for f in schema_fields}
+    extracted, line_map = extract_contract_info(contract_text, numbered_text, extraction_schema, contract_type)
 
     _notify(f"Extracted {len(extracted)} fields", "done")
     print(f"    → validation schema: {len(schema_fields)} fields | extracted: {len(extracted)} fields")
