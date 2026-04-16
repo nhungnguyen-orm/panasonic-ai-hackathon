@@ -143,7 +143,7 @@ if st.session_state["page"] == "config":
 # PAGE: UPLOAD & CHECK
 if st.session_state["page"] == "upload":
 
-    uploaded = st.file_uploader("Select contract file (.docx / .pdf)", type=["docx", "pdf"])
+    uploaded = st.file_uploader("Select contract file (.docx)", type=["docx"])
     run_btn  = st.button("Analyze & Check", disabled=not uploaded)
 
     if run_btn and uploaded is not None:
@@ -470,7 +470,7 @@ elif st.session_state["page"] == "prompt":
             p_prompt_raw = st.text_area(
                 label="Điều kiện kiểm tra",
                 placeholder=(
-                    "Nhập prompt..."
+                    "Enter a prompt..."
                 ),
                 height=90,
                 label_visibility="collapsed",
@@ -512,8 +512,8 @@ elif st.session_state["page"] == "prompt":
         st.markdown(
             '<div style="text-align:center;padding:60px 0;color:#555;">'
             '<div style="font-size:44px;margin-bottom:12px;">📄</div>'
-            '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">Chưa có kết quả</div>'
-            '<div style="font-size:13px;color:#888;">Upload hợp đồng và bấm Analyze & Check để bắt đầu</div>'
+            '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">No results yet</div>'
+            '<div style="font-size:13px;color:#888;">Upload your contract and click Analyze & Check to begin.</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -685,7 +685,7 @@ elif st.session_state["page"] == "prompt":
                 unsafe_allow_html=True,
             )
             if not p_errors:
-                st.success("✅ Không phát hiện lỗi nào.")
+                st.success("✅ No errors were detected.")
             else:
                 st.markdown(
                     '<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">'
@@ -697,7 +697,7 @@ elif st.session_state["page"] == "prompt":
                     unsafe_allow_html=True,
                 )
 
-                P_PAGE_SIZE   = 4
+                P_PAGE_SIZE   = 3
                 p_total_pages = (len(p_errors) + P_PAGE_SIZE - 1) // P_PAGE_SIZE
 
                 if p_total_pages > 1:
