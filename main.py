@@ -2,6 +2,7 @@ import os
 import json
 import boto3
 from docx import Document
+from pypdf import PdfReader
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from dotenv import load_dotenv
@@ -42,25 +43,56 @@ CONTRACT_TYPE_DESCRIPTIONS = {
 }
 
 
-def read_docx(file_path: str) -> str:
+def read_docx(file_path: str) -> tuple[list[str], str]:
+    """
+    Parse docx thành:
+    - lines: list[str] — từng dòng text (dùng để hiển thị + highlight theo index)
+    - text:  str       — full text nối lại (dùng cho LLM classify/extract)
+    """
     doc   = Document(file_path)
-    parts = []
+    lines = []
 
     for child in doc.element.body.iterchildren():
         if isinstance(child, Paragraph) or child.tag.endswith("p"):
             para = Paragraph(child, doc)
             if para.text.strip():
-                parts.append(para.text.strip())
+                lines.append(para.text.strip())
         elif isinstance(child, Table) or child.tag.endswith("tbl"):
             table = Table(child, doc)
             for row in table.rows:
                 row_text = " | ".join(
                     cell.text.strip() for cell in row.cells if cell.text.strip()
                 )
-                if row_text and (not parts or row_text != parts[-1]):
-                    parts.append(f"[TABLE]: {row_text}")
+                if row_text and (not lines or row_text != lines[-1]):
+                    lines.append(f"[TABLE]: {row_text}")
 
-    return "\n".join(parts)
+    return lines, "\n".join(lines)
+
+
+def read_pdf(file_path: str) -> tuple[list[str], str]:
+    """Parse PDF thành lines + full text."""
+    reader = PdfReader(file_path)
+    lines  = []
+    for page in reader.pages:
+        page_text = page.extract_text() or ""
+        for line in page_text.splitlines():
+            line = line.strip()
+            if line:
+                lines.append(line)
+    return lines, "\n".join(lines)
+
+
+def read_document(file_path: str) -> tuple[list[str], str]:
+    """Auto-detect format và parse."""
+    if file_path.lower().endswith(".pdf"):
+        return read_pdf(file_path)
+    return read_docx(file_path)
+
+
+def _numbered_text(lines: list[str]) -> str:
+    """Tạo text có đánh số dòng để gửi LLM extract: [L1] text\n[L2] text...
+    Chỉ dùng khi contract đủ dài để cần line tracking."""
+    return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(lines))
 
 
 def detect_contract_type(contract_text: str) -> str:
@@ -219,6 +251,18 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 
 
 # Static prompt builders
+_LINE_NUMBER_RULE = """
+LINE NUMBER RULE — QUAN TRỌNG:
+- Nội dung hợp đồng được đánh số dòng theo định dạng [L1], [L2], [L3]...
+- Với mỗi field, thêm key "_line_<field_name>" là số nguyên chỉ dòng liên quan:
+  + Nếu field có giá trị: dòng chứa giá trị đó
+  + Nếu field bị thiếu/trống: dòng chứa LABEL/TIÊU ĐỀ của field đó trong hợp đồng
+  + Nếu không tìm thấy gì liên quan: để 0
+- Ví dụ: "Mã số doanh nghiệp:" ở [L15] nhưng không có giá trị → "_line_Mã số doanh nghiệp": 15
+- Trả về JSON với cả value lẫn _line cho mỗi field theo dạng:
+  {"field_name": value, "_line_field_name": line_number, ...}
+"""
+
 def _build_prompt_static_don_gian(schema_template: str) -> str:
     return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và điền vào schema JSON.
 
@@ -250,6 +294,8 @@ QUY TẮC TRÍCH XUẤT:
 
 5. TRÍCH XUẤT TRUNG THỰC: lấy giá trị thực tế kể cả khi sai, chỉ để "" khi thực sự không có thông tin
 
+{_LINE_NUMBER_RULE}
+
 Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích.
 
 Schema:
@@ -267,6 +313,8 @@ QUY TẮC CHUNG:
 - Trường type=number: trả về số (integer hoặc float), KHÔNG có dấu ngoặc kép
 - Trường type=string: trả về chuỗi có dấu ngoặc kép
 - Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích
+
+{_LINE_NUMBER_RULE}
 
 Schema:
 {schema_template}"""
@@ -326,13 +374,23 @@ GENERAL RULES:
 - The "Goods and price" field must be a JSON object (not a string)
 - Return pure JSON only, NO markdown, NO explanation
 
+LINE NUMBER RULE — IMPORTANT:
+- Contract lines are numbered as [L1], [L2], [L3]...
+- For each extracted field, add a "_line_<field_name>" key with the integer line number where the value was found
+- Example: if "Account No: 1900NAN" is on [L15] → "_line_Account No": 15
+- If line cannot be determined → use 0
+
 Schema:
 {schema_template}"""
 
 
 # Main extraction
-
-def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
+def extract_contract_info(contract_text: str, numbered_text: str, schema: dict, contract_type: str = "") -> tuple[dict, dict]:
+    """
+    Returns:
+        extracted: {field: value, ...}
+        line_map:  {field: line_number, ...}  — 0 nếu không xác định được
+    """
     schema_template = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
     if contract_type == "mua_ban_don_gian":
@@ -352,7 +410,7 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
         def _extract_chunk(chunk_schema: dict) -> dict:
             chunk_template = json.dumps(chunk_schema, ensure_ascii=False, separators=(",", ":"))
             static = _build_prompt_static_quoc_te(chunk_template)
-            dynamic = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+            dynamic = f"\nNội dung hợp đồng (có đánh số dòng):\n{numbered_text}\n\nJSON trích xuất:"
             msgs = [{"role": "user", "content": [
                 {"text": static},
                 {"cachePoint": {"type": "default"}},
@@ -390,10 +448,11 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
 
         result = {**result_a, **result_b}
         print(f"    [4] parallel extract done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
-        return result
+        extracted, line_map = _split_line_map(result)
+        return extracted, line_map
 
     # Single call for small schemas
-    dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+    dynamic_text = f"\nNội dung hợp đồng (có đánh số dòng):\n{numbered_text}\n\nJSON trích xuất:"
     messages = [{"role": "user", "content": [
         {"text": static_text},
         {"cachePoint": {"type": "default"}},
@@ -421,9 +480,10 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
         print(f"    [4] stream complete ({len(raw_text)} chars): {perf_counter() - t_call:.2f}s")
 
         try:
-            result = _parse_json_from_response(raw_text)
-            print(f"    [4] extracted {len(result)} fields")
-            return result
+            raw_result = _parse_json_from_response(raw_text)
+            extracted, line_map = _split_line_map(raw_result)
+            print(f"    [4] extracted {len(extracted)} fields, {len(line_map)} line hints")
+            return extracted, line_map
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  [WARN] Attempt {attempt}/3 — {e}")
             if attempt < 3:
@@ -435,13 +495,45 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
 
+def _split_line_map(raw: dict) -> tuple[dict, dict]:
+    """
+    Tách _line_* keys ra khỏi extracted dict.
+    Input:  {"field_a": val, "_line_field_a": 15, "field_b": val2, ...}
+    Output: {"field_a": val, ...}, {"field_a": 15, ...}
+    """
+    extracted = {}
+    line_map  = {}
+    for k, v in raw.items():
+        if k.startswith("_line_"):
+            field = k[6:]  # bỏ prefix "_line_"
+            try:
+                line_map[field] = int(v)
+            except (TypeError, ValueError):
+                line_map[field] = 0
+        else:
+            extracted[k] = v
+    return extracted, line_map
+
+
 # Full pipeline
-def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
+def process_contract(
+    docx_path: str,
+    contract_type: str = None,
+    on_step: callable = None,
+) -> tuple[list[dict], dict, list[str], str]:
+    """
+    on_step(step: str, status: str) — callback để update UI
+    status: "running" | "done" | "error"
+    """
     def _step(label: str, t0: float) -> float:
         t1 = perf_counter()
         print(f"{t1 - t0:.2f}s")
         print(label)
         return t1
+
+    def _notify(step: str, status: str = "running"):
+        if on_step:
+            on_step(step, status)
 
     os.makedirs(JSON_DIR, exist_ok=True)
     filename        = os.path.basename(docx_path)
@@ -452,32 +544,45 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"\n{'='*50}")
 
     print(f"[1] Parse: {filename}")
-    t0            = perf_counter()
-    contract_text = read_docx(docx_path)
-    t0            = _step(f"[2] Classify contract_type...", t0)
+    t0             = perf_counter()
+    _notify("📄 Parsing document...", "running")
+    lines, contract_text = read_document(docx_path)
+    numbered_text  = _numbered_text(lines)
+    _notify(f"📄 Parsed lines", "done")
+    t0             = _step(f"[2] Classify contract_type...", t0)
 
+    _notify("🔍 Detecting contract type...", "running")
     if not contract_type:
         contract_type = detect_contract_type(contract_text)
+    _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
 
-    # [3] Fetch extraction schema + validation schema từ DynamoDB song song
-    t0 = _step(f"[3] Load extraction schema ∥ validation schema (parallel DynamoDB)...", t0)
+    # [3+4] Fetch validation schema ∥ (fetch extraction schema → LLM extract)
+    t0 = _step(f"[3+4] Validation schema ∥ LLM extract (parallel)...", t0)
+    _notify("🤖 Extracting fields with AI...", "running")
+
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_extraction = executor.submit(get_extraction_schema, contract_type)
         future_validation = executor.submit(fetch_schema_from_dynamodb, contract_type)
-        schema        = future_extraction.result()
-        schema_fields = future_validation.result()
-    print(f"    → extraction: {len(schema)} fields | validation: {len(schema_fields)} fields")
 
-    t0 = _step(f"[4] LLM extract...", t0)
-    extracted = extract_contract_info(contract_text, schema, contract_type)
+        def _do_extract():
+            schema = get_extraction_schema(contract_type)
+            return extract_contract_info(contract_text, numbered_text, schema, contract_type)
+
+        future_extract = executor.submit(_do_extract)
+        schema_fields          = future_validation.result()
+        extracted, line_map    = future_extract.result()
+
+    _notify(f"Extracted {len(extracted)} fields", "done")
+    print(f"    → validation schema: {len(schema_fields)} fields | extracted: {len(extracted)} fields")
 
     with open(extracted_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, ensure_ascii=False, indent=2)
     print(f"    → Saved: {extracted_path}")
-    t0 = _step(f"[5] Validate...", t0)
 
-    # use schema_fields already fetch
-    results = validate(extracted, schema_fields)
+    t0 = _step(f"[5] Validate...", t0)
+    _notify("✅ Validating fields...", "running")
+    results = validate(extracted, schema_fields, line_map)
+    _notify(f"✅ Validated {len(results)} fields", "done")
+
     with open(validation_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2, default=str)
     corrected = sum(1 for r in results if r["corrected"])
@@ -491,4 +596,4 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"    Total: {total:.2f}s")
     print(f"{'='*50}")
 
-    return results, extracted, contract_text, contract_type
+    return results, extracted, lines, contract_type
