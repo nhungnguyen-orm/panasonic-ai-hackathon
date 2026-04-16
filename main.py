@@ -251,9 +251,8 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
 10. XỬ LÝ DẠNG "Label: Value" TRÊN CÙNG MỘT DÒNG (thường gặp trong PDF):
    - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
      "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
-   - Nếu phần sau dấu ":" là tên/nội dung thuộc về một field KHÁC trong schema, thì field hiện tại bị THIẾU (để "")
-     Ví dụ: "Mã số doanh nghiệp: Công ty TNHH ABC" → "Mã số doanh nghiệp" = "" (thiếu)
-   - KHÔNG bao giờ nhét tên công ty / địa chỉ / tên người vào trường type=number
+   - Luôn lấy phần sau dấu ":" làm value, kể cả khi value đó sai kiểu dữ liệu
+   - KHÔNG để "" chỉ vì value trông giống tên công ty hay địa chỉ — extract trung thực, validator sẽ kiểm tra sau
 """
 
 
@@ -305,10 +304,8 @@ QUY TẮC TRÍCH XUẤT:
    - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
      "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
      "Tài khoản số: 1900NAN"           → field "Tài khoản số" = "1900NAN"
-   - Nếu phần sau dấu ":" là tên của một field KHÁC trong schema, thì field hiện tại bị THIẾU (để "")
-     Ví dụ: "Mã số doanh nghiệp: Công ty TNHH ABC" — "Công ty TNHH ABC" là giá trị của "Tên doanh nghiệp",
-     KHÔNG phải mã số → "Mã số doanh nghiệp" = "" (thiếu)
-   - KHÔNG bao giờ nhét tên công ty / địa chỉ / tên người vào trường type=number
+   - Luôn lấy phần sau dấu ":" làm value, kể cả khi value đó sai kiểu dữ liệu
+   - KHÔNG để "" chỉ vì value trông giống tên công ty hay địa chỉ — hãy extract trung thực, validator sẽ kiểm tra sau
 
 {_LINE_NUMBER_RULE}
 
@@ -392,9 +389,9 @@ GENERAL RULES:
 
 PDF "Label: Value" RULE:
 - PDFs often merge label and value on the same line, e.g. "Account No: 1900NAN"
-- Extract only the part AFTER the colon as the value
-- If the part after the colon is clearly the value of a DIFFERENT field in the schema, the current field is missing → use ""
-- NEVER put a company name, person name, or address into a type=number field
+- Extract only the part AFTER the colon as the value, even if it looks wrong
+- Always extract honestly — the validator will check types later
+- NEVER leave a field empty just because the value looks like a company name or address
 
 LINE NUMBER RULE — IMPORTANT:
 - Contract lines are numbered as [L1], [L2], [L3]...

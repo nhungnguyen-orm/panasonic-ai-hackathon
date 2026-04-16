@@ -478,9 +478,10 @@ elif st.session_state["page"] == "prompt":
             )
 
         with col_upload:
-            st.markdown('<div style="font-size:14px;color:white;margin-bottom:6px;">📎 File (.docx)</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:14px;color:white;margin-bottom:6px;">🔗 File (.docx)</div>', unsafe_allow_html=True)
             p_uploaded = st.file_uploader(
-                "upload", type=["docx", "pdf"], key="prompt_uploader",
+                "upload", type=["docx", "pdf"],
+                key=f"prompt_uploader_{st.session_state.get('p_upload_counter', 0)}",
                 label_visibility="collapsed",
             )
             if p_uploaded:
@@ -502,6 +503,9 @@ elif st.session_state["page"] == "prompt":
                 st.markdown('<div style="font-size:12px;color:#aaa;padding-top:10px;"></div>', unsafe_allow_html=True)
             elif not p_prompt_raw.strip():
                 st.markdown('<div style="font-size:12px;color:#f0a500;padding-top:10px;"></div>', unsafe_allow_html=True)
+
+    # Status placeholder — hiện ngay dưới input panel
+    p_status_placeholder = st.empty()
 
     # Empty state
     if not p_results:
@@ -737,7 +741,7 @@ elif st.session_state["page"] == "prompt":
 
     # Run logic
     if p_run_btn and p_uploaded:
-        with st.status("Analyzing contract...", expanded=True) as status:
+        with p_status_placeholder.status("Analyzing contract...", expanded=True) as status:
             step_placeholder = st.empty()
             steps_done = []
 
@@ -787,4 +791,5 @@ elif st.session_state["page"] == "prompt":
         st.session_state["p_lines"]      = lines
         st.session_state["p_filename"]   = p_uploaded.name
         st.session_state["p_error_page"] = 1
+        st.session_state["p_upload_counter"] = st.session_state.get("p_upload_counter", 0) + 1
         st.rerun()
