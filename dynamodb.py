@@ -6,11 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# AWS_PROFILE       = os.getenv("AWS_PROFILE")
-# AWS_REGION        = os.getenv("AWS_REGION")
 SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
-# session           = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
 dynamodb_client   = boto3.client("dynamodb", region_name='ap-southeast-2')
 dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 

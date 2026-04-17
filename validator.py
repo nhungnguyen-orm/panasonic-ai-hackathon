@@ -13,7 +13,6 @@ SCHEMA_TABLE_NAME = "PanasonicContractSchemaDev"
 
 dynamodb_resource = boto3.resource("dynamodb", region_name='ap-southeast-2')
 
-
 # Fetch schema
 def fetch_schema_from_dynamodb(contract_type: str) -> list[dict]:
     table    = dynamodb_resource.Table(SCHEMA_TABLE_NAME)
@@ -130,31 +129,31 @@ def _validate_object_items(field_name: str, value: dict, item_schema: dict | Non
                     )
 
         results.append({
-            "field":     f"{field_name} - {desc}",
-            "value":     item,
-            "corrected": len(errors) == 0,
-            "reason":    "; ".join(errors) if errors else None,
-            "line_hint": "",
+            "field":       f"{field_name} - {desc}",
+            "value":       item,
+            "corrected":   len(errors) == 0,
+            "reason":      "; ".join(errors) if errors else None,
+            "line_number": 0,
         })
 
     return results
 
 
 # Core validation 
-def _validate_single_field(field_def: dict, extracted: dict) -> list[dict]:
-    """Validate một field đơn lẻ, trả về list kết quả (object field có thể trả nhiều)."""
-    field_name = field_def["field_name"]
-    field_type = field_def.get("type", "string")
-    required   = bool(field_def.get("required", False))
-    value      = extracted.get(field_name)
+def _validate_single_field(field_def: dict, extracted: dict, line_map: dict) -> list[dict]:
+    field_name  = field_def["field_name"]
+    field_type  = field_def.get("type", "string")
+    required    = bool(field_def.get("required", False))
+    value       = extracted.get(field_name)
+    line_number = line_map.get(field_name, 0)
 
     if value is None or value == "":
         return [{
-            "field":     field_name,
-            "value":     value,
-            "corrected": False,
-            "reason":    "missing required field" if required else "missing field",
-            "line_hint": field_def.get("line_hint", ""),
+            "field":       field_name,
+            "value":       value,
+            "corrected":   False,
+            "reason":      "missing required field" if required else "missing field",
+            "line_number": line_number,
         }]
 
     checker = TYPE_CHECKERS.get(field_type)
@@ -163,35 +162,37 @@ def _validate_single_field(field_def: dict, extracted: dict) -> list[dict]:
             parsed = extract_number(value)
             reason = "expected number" if parsed is not None else f"wrong type - expected number, got '{value}'"
             return [{
-                "field":     field_name,
-                "value":     value,
-                "corrected": False,
-                "reason":    reason,
-                "line_hint": field_def.get("line_hint", ""),
+                "field":       field_name,
+                "value":       value,
+                "corrected":   False,
+                "reason":      reason,
+                "line_number": line_number,
             }]
         return [{
-            "field":     field_name,
-            "value":     value,
-            "corrected": False,
-            "reason":    f"wrong type - expected {field_type}",
-            "line_hint": field_def.get("line_hint", ""),
+            "field":       field_name,
+            "value":       value,
+            "corrected":   False,
+            "reason":      f"wrong type - expected {field_type}",
+            "line_number": line_number,
         }]
 
     if field_type == "object" and isinstance(value, dict):
         raw_item_schema = field_def.get("item_schema")
         item_schema = json.loads(raw_item_schema) if isinstance(raw_item_schema, str) else raw_item_schema
         return [
-            {"field": field_name, "value": value, "corrected": True, "reason": None, "line_hint": ""},
+            {"field": field_name, "value": value, "corrected": True, "reason": None, "line_number": line_number},
             *_validate_object_items(field_name, value, item_schema),
         ]
 
-    return [{"field": field_name, "value": value, "corrected": True, "reason": None, "line_hint": ""}]
+    return [{"field": field_name, "value": value, "corrected": True, "reason": None, "line_number": line_number}]
 
 
-def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
+def validate(extracted: dict, schema_fields: list[dict], line_map: dict | None = None) -> list[dict]:
+    if line_map is None:
+        line_map = {}
     with ThreadPoolExecutor(max_workers=min(16, len(schema_fields))) as executor:
         futures = {
-            executor.submit(_validate_single_field, field_def, extracted): i
+            executor.submit(_validate_single_field, field_def, extracted, line_map): i
             for i, field_def in enumerate(schema_fields)
         }
         ordered: list[list[dict]] = [None] * len(schema_fields)
@@ -203,7 +204,6 @@ def validate(extracted: dict, schema_fields: list[dict]) -> list[dict]:
 
 
 # Entry point
-
 def validate_contract(extracted: dict, contract_type: str, output_path: str) -> list[dict]:
     schema_fields = fetch_schema_from_dynamodb(contract_type)
 

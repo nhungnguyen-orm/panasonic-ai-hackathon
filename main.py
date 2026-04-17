@@ -2,6 +2,7 @@ import os
 import json
 import boto3
 from docx import Document
+from pypdf import PdfReader
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from dotenv import load_dotenv
@@ -42,25 +43,56 @@ CONTRACT_TYPE_DESCRIPTIONS = {
 }
 
 
-def read_docx(file_path: str) -> str:
+def read_docx(file_path: str) -> tuple[list[str], str]:
+    """
+    Parse docx thành:
+    - lines: list[str] — từng dòng text (dùng để hiển thị + highlight theo index)
+    - text:  str       — full text nối lại (dùng cho LLM classify/extract)
+    """
     doc   = Document(file_path)
-    parts = []
+    lines = []
 
     for child in doc.element.body.iterchildren():
         if isinstance(child, Paragraph) or child.tag.endswith("p"):
             para = Paragraph(child, doc)
             if para.text.strip():
-                parts.append(para.text.strip())
+                lines.append(para.text.strip())
         elif isinstance(child, Table) or child.tag.endswith("tbl"):
             table = Table(child, doc)
             for row in table.rows:
                 row_text = " | ".join(
                     cell.text.strip() for cell in row.cells if cell.text.strip()
                 )
-                if row_text and (not parts or row_text != parts[-1]):
-                    parts.append(f"[TABLE]: {row_text}")
+                if row_text and (not lines or row_text != lines[-1]):
+                    lines.append(f"[TABLE]: {row_text}")
 
-    return "\n".join(parts)
+    return lines, "\n".join(lines)
+
+
+def read_pdf(file_path: str) -> tuple[list[str], str]:
+    """Parse PDF thành lines + full text."""
+    reader = PdfReader(file_path)
+    lines  = []
+    for page in reader.pages:
+        page_text = page.extract_text() or ""
+        for line in page_text.splitlines():
+            line = line.strip()
+            if line:
+                lines.append(line)
+    return lines, "\n".join(lines)
+
+
+def read_document(file_path: str) -> tuple[list[str], str]:
+    """Auto-detect format và parse."""
+    if file_path.lower().endswith(".pdf"):
+        return read_pdf(file_path)
+    return read_docx(file_path)
+
+
+def _numbered_text(lines: list[str]) -> str:
+    """Tạo text có đánh số dòng để gửi LLM extract: [L1] text\n[L2] text...
+    Chỉ dùng khi contract đủ dài để cần line tracking."""
+    return "\n".join(f"[L{i+1}] {line}" for i, line in enumerate(lines))
 
 
 def detect_contract_type(contract_text: str) -> str:
@@ -215,10 +247,28 @@ QUY TẮC TRÍCH XUẤT CHO HỢP ĐỒNG MUA BÁN QUỐC TẾ:
    - Ví dụ: "Giá cả: bộ" → "bộ"
    - Ví dụ: "theo quy định tại điều trong hợp đồng này" → "điều"
    - CHỈ để "" khi thực sự không có thông tin nào liên quan
+
+10. XỬ LÝ DẠNG "Label: Value" TRÊN CÙNG MỘT DÒNG (thường gặp trong PDF):
+   - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
+     "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
+   - Luôn lấy phần sau dấu ":" làm value, kể cả khi value đó sai kiểu dữ liệu
+   - KHÔNG để "" chỉ vì value trông giống tên công ty hay địa chỉ — extract trung thực, validator sẽ kiểm tra sau
 """
 
 
 # Static prompt builders
+_LINE_NUMBER_RULE = """
+LINE NUMBER RULE — QUAN TRỌNG:
+- Nội dung hợp đồng được đánh số dòng theo định dạng [L1], [L2], [L3]...
+- Với mỗi field, thêm key "_line_<field_name>" là số nguyên chỉ dòng liên quan:
+  + Nếu field có giá trị: dòng chứa giá trị đó
+  + Nếu field bị thiếu/trống: dòng chứa LABEL/TIÊU ĐỀ của field đó trong hợp đồng
+  + Nếu không tìm thấy gì liên quan: để 0
+- Ví dụ: "Mã số doanh nghiệp:" ở [L15] nhưng không có giá trị → "_line_Mã số doanh nghiệp": 15
+- Trả về JSON với cả value lẫn _line cho mỗi field theo dạng:
+  {"field_name": value, "_line_field_name": line_number, ...}
+"""
+
 def _build_prompt_static_don_gian(schema_template: str) -> str:
     return f"""Bạn là chuyên gia phân tích hợp đồng. Hãy đọc kỹ nội dung hợp đồng và điền vào schema JSON.
 
@@ -248,7 +298,21 @@ QUY TẮC TRÍCH XUẤT:
        ]
      }}
 
+5. TRƯỜNG "Bên A - Giấy ủy quyền số" (type=number): chỉ lấy số, bỏ chữ ở phía sau
+    - "1 ngày 06 tháng 04 năm 2026 do Nguyễn Văn An chức vụ Giám đốc ký" → 1
+    - TUYỆT ĐỐI không trả về string cho trường number, chỉ trả về con số thuần túy
+    -> TRẢ VỀ NUMBER
+
 5. TRÍCH XUẤT TRUNG THỰC: lấy giá trị thực tế kể cả khi sai, chỉ để "" khi thực sự không có thông tin
+
+6. XỬ LÝ DẠNG "Label: Value" TRÊN CÙNG MỘT DÒNG (thường gặp trong PDF):
+   - PDF đôi khi gộp label và value trên cùng một dòng, ví dụ:
+     "Mã số doanh nghiệp: 0123456789"  → field "Mã số doanh nghiệp" = 0123456789
+     "Tài khoản số: 1900NAN"           → field "Tài khoản số" = "1900NAN"
+   - Luôn lấy phần sau dấu ":" làm value, kể cả khi value đó sai kiểu dữ liệu
+   - KHÔNG để "" chỉ vì value trông giống tên công ty hay địa chỉ — hãy extract trung thực, validator sẽ kiểm tra sau
+
+{_LINE_NUMBER_RULE}
 
 Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích.
 
@@ -267,6 +331,8 @@ QUY TẮC CHUNG:
 - Trường type=number: trả về số (integer hoặc float), KHÔNG có dấu ngoặc kép
 - Trường type=string: trả về chuỗi có dấu ngoặc kép
 - Chỉ trả về JSON thuần túy, KHÔNG markdown, KHÔNG giải thích
+
+{_LINE_NUMBER_RULE}
 
 Schema:
 {schema_template}"""
@@ -326,13 +392,29 @@ GENERAL RULES:
 - The "Goods and price" field must be a JSON object (not a string)
 - Return pure JSON only, NO markdown, NO explanation
 
+PDF "Label: Value" RULE:
+- PDFs often merge label and value on the same line, e.g. "Account No: 1900NAN"
+- Extract only the part AFTER the colon as the value, even if it looks wrong
+- Always extract honestly — the validator will check types later
+- NEVER leave a field empty just because the value looks like a company name or address
+
+LINE NUMBER RULE — IMPORTANT:
+- Contract lines are numbered as [L1], [L2], [L3]...
+- For each extracted field, add a "_line_<field_name>" key with the integer line number where the value was found
+- Example: if "Account No: 1900NAN" is on [L15] → "_line_Account No": 15
+- If line cannot be determined → use 0
+
 Schema:
 {schema_template}"""
 
 
 # Main extraction
-
-def extract_contract_info(contract_text: str, schema: dict, contract_type: str = "") -> dict:
+def extract_contract_info(contract_text: str, numbered_text: str, schema: dict, contract_type: str = "") -> tuple[dict, dict]:
+    """
+    Returns:
+        extracted: {field: value, ...}
+        line_map:  {field: line_number, ...}  — 0 nếu không xác định được
+    """
     schema_template = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
 
     if contract_type == "mua_ban_don_gian":
@@ -342,17 +424,28 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     else:
         static_text = _build_prompt_static_quoc_te(schema_template)
 
-    # For large schemas, split into 2 parallel calls
+    # For large schemas, split into parallel calls (3 chunks if >40 fields, 2 chunks if >20)
     schema_items = list(schema.items())
-    if len(schema_items) > 30 and contract_type not in ("mua_ban_don_gian", "mua_ban_tieng_anh"):
-        mid = len(schema_items) // 2
-        schema_a = dict(schema_items[:mid])
-        schema_b = dict(schema_items[mid:])
+    n_items = len(schema_items)
+    n_chunks = 3 if n_items > 40 else (2 if n_items > 20 else 1)
+
+    if n_chunks > 1:
+        chunk_size = (n_items + n_chunks - 1) // n_chunks
+        schema_chunks = [
+            dict(schema_items[i * chunk_size:(i + 1) * chunk_size])
+            for i in range(n_chunks)
+            if schema_items[i * chunk_size:(i + 1) * chunk_size]
+        ]
 
         def _extract_chunk(chunk_schema: dict) -> dict:
             chunk_template = json.dumps(chunk_schema, ensure_ascii=False, separators=(",", ":"))
-            static = _build_prompt_static_quoc_te(chunk_template)
-            dynamic = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+            if contract_type == "mua_ban_don_gian":
+                static = _build_prompt_static_don_gian(chunk_template)
+            elif contract_type == "mua_ban_tieng_anh":
+                static = _build_prompt_static_tieng_anh(chunk_template)
+            else:
+                static = _build_prompt_static_quoc_te(chunk_template)
+            dynamic = f"\nNội dung hợp đồng (có đánh số dòng):\n{numbered_text}\n\nJSON trích xuất:"
             msgs = [{"role": "user", "content": [
                 {"text": static},
                 {"cachePoint": {"type": "default"}},
@@ -382,18 +475,19 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
             raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
         t_start = perf_counter()
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_a = executor.submit(_extract_chunk, schema_a)
-            future_b = executor.submit(_extract_chunk, schema_b)
-            result_a = future_a.result()
-            result_b = future_b.result()
+        with ThreadPoolExecutor(max_workers=len(schema_chunks)) as executor:
+            futures = [executor.submit(_extract_chunk, chunk) for chunk in schema_chunks]
+            results_list = [f.result() for f in futures]
 
-        result = {**result_a, **result_b}
-        print(f"    [4] parallel extract done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
-        return result
+        result = {}
+        for r in results_list:
+            result.update(r)
+        print(f"    [4] parallel extract ({len(schema_chunks)} chunks) done: {perf_counter()-t_start:.2f}s, {len(result)} fields")
+        extracted, line_map = _split_line_map(result)
+        return extracted, line_map
 
     # Single call for small schemas
-    dynamic_text = f"\nNội dung hợp đồng:\n{contract_text}\n\nJSON trích xuất:"
+    dynamic_text = f"\nNội dung hợp đồng (có đánh số dòng):\n{numbered_text}\n\nJSON trích xuất:"
     messages = [{"role": "user", "content": [
         {"text": static_text},
         {"cachePoint": {"type": "default"}},
@@ -421,9 +515,10 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
         print(f"    [4] stream complete ({len(raw_text)} chars): {perf_counter() - t_call:.2f}s")
 
         try:
-            result = _parse_json_from_response(raw_text)
-            print(f"    [4] extracted {len(result)} fields")
-            return result
+            raw_result = _parse_json_from_response(raw_text)
+            extracted, line_map = _split_line_map(raw_result)
+            print(f"    [4] extracted {len(extracted)} fields, {len(line_map)} line hints")
+            return extracted, line_map
         except (ValueError, json.JSONDecodeError) as e:
             print(f"  [WARN] Attempt {attempt}/3 — {e}")
             if attempt < 3:
@@ -435,13 +530,45 @@ def extract_contract_info(contract_text: str, schema: dict, contract_type: str =
     raise RuntimeError("Không thể parse JSON sau 3 lần thử.")
 
 
+def _split_line_map(raw: dict) -> tuple[dict, dict]:
+    """
+    Tách _line_* keys ra khỏi extracted dict.
+    Input:  {"field_a": val, "_line_field_a": 15, "field_b": val2, ...}
+    Output: {"field_a": val, ...}, {"field_a": 15, ...}
+    """
+    extracted = {}
+    line_map  = {}
+    for k, v in raw.items():
+        if k.startswith("_line_"):
+            field = k[6:]  # bỏ prefix "_line_"
+            try:
+                line_map[field] = int(v)
+            except (TypeError, ValueError):
+                line_map[field] = 0
+        else:
+            extracted[k] = v
+    return extracted, line_map
+
+
 # Full pipeline
-def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[dict], dict, str, str]:
+def process_contract(
+    docx_path: str,
+    contract_type: str = None,
+    on_step: callable = None,
+) -> tuple[list[dict], dict, list[str], str]:
+    """
+    on_step(step: str, status: str) — callback để update UI
+    status: "running" | "done" | "error"
+    """
     def _step(label: str, t0: float) -> float:
         t1 = perf_counter()
         print(f"{t1 - t0:.2f}s")
         print(label)
         return t1
+
+    def _notify(step: str, status: str = "running"):
+        if on_step:
+            on_step(step, status)
 
     os.makedirs(JSON_DIR, exist_ok=True)
     filename        = os.path.basename(docx_path)
@@ -452,32 +579,55 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"\n{'='*50}")
 
     print(f"[1] Parse: {filename}")
-    t0            = perf_counter()
-    contract_text = read_docx(docx_path)
-    t0            = _step(f"[2] Classify contract_type...", t0)
+    t0 = perf_counter()
+    _notify("📄 Parsing document...", "running")
 
-    if not contract_type:
+    if contract_type:
+        # contract_type known upfront → parse doc + fetch schema in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_parse  = executor.submit(read_document, docx_path)
+            future_schema = executor.submit(fetch_schema_from_dynamodb, contract_type)
+            lines, contract_text = future_parse.result()
+            schema_fields        = future_schema.result()
+        numbered_text = _numbered_text(lines)
+        _notify("📄 Parsed lines", "done")
+        t0 = _step(f"[2] contract_type provided: {contract_type}", t0)
+        _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
+    else:
+        # Need to parse first, then detect type, then fetch schema
+        lines, contract_text = read_document(docx_path)
+        numbered_text = _numbered_text(lines)
+        _notify("📄 Parsed lines", "done")
+        t0 = _step(f"[2] Classify contract_type...", t0)
+
+        _notify("🔍 Detecting contract type...", "running")
         contract_type = detect_contract_type(contract_text)
+        _notify(f"🔍 Contract type: {contract_type.replace('_', ' ').title()}", "done")
 
-    # [3] Fetch extraction schema + validation schema từ DynamoDB song song
-    t0 = _step(f"[3] Load extraction schema ∥ validation schema (parallel DynamoDB)...", t0)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_extraction = executor.submit(get_extraction_schema, contract_type)
-        future_validation = executor.submit(fetch_schema_from_dynamodb, contract_type)
-        schema        = future_extraction.result()
-        schema_fields = future_validation.result()
-    print(f"    → extraction: {len(schema)} fields | validation: {len(schema_fields)} fields")
+        schema_fields = fetch_schema_from_dynamodb(contract_type)
 
-    t0 = _step(f"[4] LLM extract...", t0)
-    extracted = extract_contract_info(contract_text, schema, contract_type)
+    if not schema_fields:
+        raise ValueError(f"Không tìm thấy schema cho '{contract_type}' trong DynamoDB.")
+
+    # [3+4] LLM extract using already-fetched schema
+    t0 = _step(f"[3+4] LLM extract ({len(schema_fields)} fields)...", t0)
+    _notify("🤖 Extracting fields with AI...", "running")
+
+    extraction_schema = {f["field_name"]: "" for f in schema_fields}
+    extracted, line_map = extract_contract_info(contract_text, numbered_text, extraction_schema, contract_type)
+
+    _notify(f"Extracted {len(extracted)} fields", "done")
+    print(f"    → validation schema: {len(schema_fields)} fields | extracted: {len(extracted)} fields")
 
     with open(extracted_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, ensure_ascii=False, indent=2)
     print(f"    → Saved: {extracted_path}")
-    t0 = _step(f"[5] Validate...", t0)
 
-    # use schema_fields already fetch
-    results = validate(extracted, schema_fields)
+    t0 = _step(f"[5] Validate...", t0)
+    _notify("✅ Validating fields...", "running")
+    results = validate(extracted, schema_fields, line_map)
+    _notify(f"✅ Validated {len(results)} fields", "done")
+
     with open(validation_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2, default=str)
     corrected = sum(1 for r in results if r["corrected"])
@@ -491,4 +641,4 @@ def process_contract(docx_path: str, contract_type: str = None) -> tuple[list[di
     print(f"    Total: {total:.2f}s")
     print(f"{'='*50}")
 
-    return results, extracted, contract_text, contract_type
+    return results, extracted, lines, contract_type
